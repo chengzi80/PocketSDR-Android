@@ -5,14 +5,20 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
@@ -24,6 +30,17 @@ class MainActivity : AppCompatActivity() {
         private const val ACTION_USB_PERMISSION =
             "com.chengzi80.pocketsdr.USB_PERMISSION"
 
+        /*
+         * 当前 V0.1 暂时识别 RTL2832U。
+         *
+         * 后续会在这里扩展：
+         * RTL-SDR
+         * HackRF
+         * Airspy
+         * LimeSDR
+         * PlutoSDR
+         * 等其他 SDR。
+         */
         private const val RTL2832U_VID = 0x0BDA
         private const val RTL2832U_PID = 0x2838
     }
@@ -40,17 +57,21 @@ class MainActivity : AppCompatActivity() {
             }
 
             val device =
-    if (android.os.Build.VERSION.SDK_INT >= 33) {
-        intent.getParcelableExtra(
-            UsbManager.EXTRA_DEVICE,
-            UsbDevice::class.java
-        )
-    } else {
-        @Suppress("DEPRECATION")
-        intent.getParcelableExtra<UsbDevice>(
-            UsbManager.EXTRA_DEVICE
-        )
-    }
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+
+                    intent.getParcelableExtra(
+                        UsbManager.EXTRA_DEVICE,
+                        UsbDevice::class.java
+                    )
+
+                } else {
+
+                    @Suppress("DEPRECATION")
+
+                    intent.getParcelableExtra<UsbDevice>(
+                        UsbManager.EXTRA_DEVICE
+                    )
+                }
 
             val granted =
                 intent.getBooleanExtra(
@@ -62,7 +83,7 @@ class MainActivity : AppCompatActivity() {
 
                 showDevice(
                     device,
-                    "✓ USB 权限已授予"
+                    "✓ SDR 设备 USB 权限已授予"
                 )
 
             } else {
@@ -78,6 +99,49 @@ class MainActivity : AppCompatActivity() {
     ) {
 
         super.onCreate(savedInstanceState)
+
+        /*
+         * Android 15 / targetSdk 35：
+         *
+         * 开启 Edge-to-Edge。
+         *
+         * 这样状态栏可以真正透明，
+         * App 背景可以延伸到状态栏区域。
+         *
+         * 实际内容的位置由 WindowInsets 控制，
+         * 因此不会遮挡系统时间、电量等信息。
+         */
+        WindowCompat.setDecorFitsSystemWindows(
+            window,
+            false
+        )
+
+        /*
+         * 状态栏和导航栏透明。
+         */
+        window.statusBarColor =
+            Color.TRANSPARENT
+
+        window.navigationBarColor =
+            Color.TRANSPARENT
+
+        /*
+         * 系统状态栏使用深色图标。
+         *
+         * 因为目前 PocketSDR 背景是白色，
+         * 所以时间、Wi-Fi、电量等使用黑色/深色显示。
+         */
+        val controller =
+            WindowCompat.getInsetsController(
+                window,
+                window.decorView
+            )
+
+        controller.isAppearanceLightStatusBars =
+            true
+
+        controller.isAppearanceLightNavigationBars =
+            true
 
         usbManager =
             getSystemService(
@@ -100,6 +164,9 @@ class MainActivity : AppCompatActivity() {
         scanUsbDevices()
     }
 
+    /**
+     * 创建 PocketSDR 主界面
+     */
     private fun buildUserInterface() {
 
         val root =
@@ -109,54 +176,105 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.VERTICAL
 
                 setPadding(
-                    32,
-                    40,
-                    32,
-                    32
+                    dp(32),
+                    dp(24),
+                    dp(32),
+                    dp(32)
+                )
+
+                setBackgroundColor(
+                    Color.WHITE
                 )
             }
 
+        /*
+         * PocketSDR 标题
+         */
         val title =
             TextView(this).apply {
 
-                text = "PocketSDR"
+                text =
+                    "PocketSDR"
 
-                textSize = 30f
+                textSize =
+                    30f
+
+                setTextColor(
+                    Color.rgb(
+                        70,
+                        70,
+                        70
+                    )
+                )
             }
 
+        /*
+         * V0.1 版本说明
+         */
         val subtitle =
             TextView(this).apply {
 
                 text =
-                    "V0.1 · RTL2832U USB 检测"
+                    "V0.1 · SDR 设备检测"
 
-                textSize = 16f
+                textSize =
+                    16f
+
+                setTextColor(
+                    Color.rgb(
+                        90,
+                        90,
+                        90
+                    )
+                )
 
                 setPadding(
                     0,
-                    8,
+                    dp(8),
                     0,
-                    24
+                    dp(24)
                 )
             }
 
+        /*
+         * USB / SDR 状态
+         */
         statusText =
             TextView(this).apply {
 
-                textSize = 17f
+                textSize =
+                    17f
+
+                setTextColor(
+                    Color.rgb(
+                        85,
+                        85,
+                        85
+                    )
+                )
 
                 setPadding(
                     0,
-                    16,
+                    dp(16),
                     0,
-                    16
+                    dp(16)
                 )
+
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
             }
 
+        /*
+         * USB 扫描按钮
+         */
         val scanButton =
             Button(this).apply {
 
-                text = "重新扫描 USB"
+                text =
+                    "重新扫描 USB"
 
                 setOnClickListener {
 
@@ -172,34 +290,99 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(scanButton)
 
+        /*
+         * 使用 ScrollView，
+         * 防止小屏手机内容超出屏幕。
+         */
         val scroll =
             ScrollView(this).apply {
+
+                setBackgroundColor(
+                    Color.WHITE
+                )
 
                 addView(root)
             }
 
+        /*
+         * 关键部分：
+         *
+         * 状态栏保持透明，
+         * 但是正文自动避开状态栏。
+         *
+         * 因此最终效果：
+         *
+         * ┌────────────────────┐
+         * │ 18:53        33%  │
+         * │                    │
+         * │ PocketSDR          │
+         * │                    │
+         * └────────────────────┘
+         *
+         * 状态栏透明，
+         * 但不会遮挡 PocketSDR。
+         */
+        ViewCompat.setOnApplyWindowInsetsListener(
+            scroll
+        ) { view, insets ->
+
+            val systemBars =
+                insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars()
+                )
+
+            view.setPadding(
+                systemBars.left,
+                systemBars.top,
+                systemBars.right,
+                systemBars.bottom
+            )
+
+            insets
+        }
+
         setContentView(scroll)
+
+        /*
+         * 立即请求系统重新计算 Insets。
+         */
+        ViewCompat.requestApplyInsets(
+            scroll
+        )
     }
 
+    /**
+     * 扫描 USB SDR 设备
+     */
     private fun scanUsbDevices() {
 
         val devices =
             usbManager.deviceList.values.toList()
 
+        /*
+         * 没有任何 USB 设备
+         */
         if (devices.isEmpty()) {
 
             statusText.text =
                 """
-                未发现 USB 设备。
+                未发现 SDR 设备。
 
                 请通过 USB-C OTG 连接：
 
-                RTL2832U + R820T2
+                SDR 设备
                 """.trimIndent()
 
             return
         }
 
+        /*
+         * 当前 V0.1：
+         *
+         * 先识别 RTL2832U。
+         *
+         * 后续继续扩展其他 SDR。
+         */
         val rtlDevices =
             devices.filter {
 
@@ -209,6 +392,10 @@ class MainActivity : AppCompatActivity() {
                     RTL2832U_PID
             }
 
+        /*
+         * 有 USB 设备，
+         * 但当前还没有识别。
+         */
         if (rtlDevices.isEmpty()) {
 
             val details =
@@ -228,10 +415,9 @@ class MainActivity : AppCompatActivity() {
 
             statusText.text =
                 """
-                发现 USB 设备，
+                发现 USB 设备。
 
-                但是没有匹配常见
-                RTL2832U ID。
+                当前设备暂未识别为支持的 SDR。
 
                 $details
                 """.trimIndent()
@@ -239,14 +425,20 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        /*
+         * 找到 RTL2832U
+         */
         val device =
             rtlDevices.first()
 
         showDevice(
             device,
-            "✓ 发现 RTL2832U"
+            "✓ 发现 SDR 设备"
         )
 
+        /*
+         * 检查 USB 权限
+         */
         if (
             usbManager.hasPermission(
                 device
@@ -265,21 +457,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 请求 USB 权限
+     */
     private fun requestUsbPermission(
         device: UsbDevice
     ) {
 
         val pendingIntent =
             PendingIntent.getBroadcast(
-
                 this,
-
                 0,
-
                 Intent(
                     ACTION_USB_PERMISSION
                 ),
-
                 PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -289,6 +480,9 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * 显示 SDR 设备信息
+     */
     private fun showDevice(
         device: UsbDevice,
         prefix: String
@@ -320,21 +514,37 @@ class MainActivity : AppCompatActivity() {
                 appendLine()
 
                 appendLine(
-                    "目标硬件："
+                    "SDR 设备："
                 )
 
                 appendLine(
-                    "RTL2832U + R820T2"
+                    "RTL2832U"
                 )
 
                 appendLine()
 
                 appendLine(
-                    "V0.1：USB 设备识别"
+                    "V0.1：USB SDR 设备识别"
                 )
             }
     }
 
+    /**
+     * dp 转 px
+     */
+    private fun dp(
+        value: Int
+    ): Int {
+
+        return (
+            value *
+                resources.displayMetrics.density
+            ).roundToInt()
+    }
+
+    /**
+     * VID / PID 转十六进制
+     */
     private fun hex(
         value: Int
     ): String {
