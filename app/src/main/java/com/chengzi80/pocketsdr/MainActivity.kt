@@ -40,9 +40,17 @@ class MainActivity : AppCompatActivity() {
             }
 
             val device =
-                intent.getParcelableExtra<UsbDevice>(
-                    UsbManager.EXTRA_DEVICE
-                )
+    if (android.os.Build.VERSION.SDK_INT >= 33) {
+        intent.getParcelableExtra(
+            UsbManager.EXTRA_DEVICE,
+            UsbDevice::class.java
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        intent.getParcelableExtra<UsbDevice>(
+            UsbManager.EXTRA_DEVICE
+        )
+    }
 
             val granted =
                 intent.getBooleanExtra(
