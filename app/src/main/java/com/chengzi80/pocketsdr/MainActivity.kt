@@ -28,7 +28,7 @@ class MainActivity : AppCompatActivity() {
         private const val RTL2832U_PID = 0x2838
     }
 
-    private val usbReceiver = object : BroadcastReceiver {
+    private val usbReceiver = object : BroadcastReceiver() {
 
         override fun onReceive(
             context: Context,
