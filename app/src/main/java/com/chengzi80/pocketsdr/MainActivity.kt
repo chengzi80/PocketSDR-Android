@@ -1,4 +1,3 @@
-```kotlin
 package com.chengzi80.pocketsdr
 
 import android.os.Bundle
