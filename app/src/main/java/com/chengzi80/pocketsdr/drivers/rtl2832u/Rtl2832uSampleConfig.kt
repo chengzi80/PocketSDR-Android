@@ -3,7 +3,7 @@ package com.chengzi80.pocketsdr.drivers.rtl2832u
 data class Rtl2832uSampleConfig(
     val sampleRateHz: Long = 2_048_000L,
     val frequencyHz: Long = 100_000_000L,
-    val bufferSize: Int = 16 * 16384,
+    val bufferSize: Int = 16384,
     val usbTimeoutMs: Int = 1000
 ) {
 
@@ -21,7 +21,7 @@ data class Rtl2832uSampleConfig(
 
         const val MAX_FREQUENCY_HZ = 1_766_000_000L
 
-        const val DEFAULT_BUFFER_SIZE = 16 * 16384
+        const val DEFAULT_BUFFER_SIZE = 16384
 
         const val DEFAULT_USB_TIMEOUT_MS = 1000
 
