@@ -14,6 +14,45 @@ class R82xxTuner(
 
         private const val MIN_FREQUENCY_HZ = 24_000_000L
         private const val MAX_FREQUENCY_HZ = 1_766_000_000L
+
+        /*
+         * rtl-sdr 官方 R82xx 初始化寄存器。
+         *
+         * 从寄存器 0x05 开始：
+         *
+         * 05 - 1f
+         *
+         * 共 27 个寄存器。
+         */
+        private val INIT_REGISTERS = byteArrayOf(
+            0x83.toByte(),
+            0x32.toByte(),
+            0x75.toByte(),
+            0xC0.toByte(),
+            0x40.toByte(),
+            0xD6.toByte(),
+            0x6C.toByte(),
+            0xF5.toByte(),
+            0x63.toByte(),
+            0x75.toByte(),
+            0x68.toByte(),
+            0x6C.toByte(),
+            0x83.toByte(),
+            0x80.toByte(),
+            0x00.toByte(),
+            0x0F.toByte(),
+            0x00.toByte(),
+            0xC0.toByte(),
+            0x30.toByte(),
+            0x48.toByte(),
+            0xCC.toByte(),
+            0x60.toByte(),
+            0x00.toByte(),
+            0x54.toByte(),
+            0xAE.toByte(),
+            0x4A.toByte(),
+            0xC0.toByte()
+        )
     }
 
     enum class TunerType {
@@ -36,20 +75,8 @@ class R82xxTuner(
 
     private var currentFrequencyHz = 0L
 
-    /**
-     * 当前晶振频率。
-     *
-     * 大多数 RTL2832U + R820T/R820T2 设备使用 28.8 MHz。
-     */
     private var xtalFrequencyHz = DEFAULT_XTAL_HZ
 
-    /**
-     * 检测 R82xx 调谐器。
-     *
-     * 注意：
-     * 这里主要负责确认 I2C 通信是否正常。
-     * R820T 与 R820T2 的完整型号识别不能仅依靠这里的简单寄存器判断。
-     */
     fun detect(): DetectionResult? {
 
         if (!control.setI2cRepeater(true)) {
@@ -64,9 +91,11 @@ class R82xxTuner(
                 length = 5
             )
 
-            if (r820Registers != null && r820Registers.size == 5) {
+            if (r820Registers != null) {
 
-                val tunerType = detectR82xxType(r820Registers)
+                val tunerType = detectR82xxType(
+                    r820Registers
+                )
 
                 if (tunerType != TunerType.UNKNOWN) {
 
@@ -87,7 +116,7 @@ class R82xxTuner(
                 length = 5
             )
 
-            if (r828dRegisters != null && r828dRegisters.size == 5) {
+            if (r828dRegisters != null) {
 
                 detectedType = TunerType.R828D
                 detectedAddress = R828D_I2C_ADDR
@@ -113,13 +142,15 @@ class R82xxTuner(
     /**
      * 初始化 R82xx。
      *
-     * 当前阶段先完成基础寄存器配置。
-     * PLL、滤波器、AGC 等将在下一阶段继续完善。
+     * 这里首先写入官方 rtl-sdr 使用的
+     * R82xx 初始寄存器表。
      */
     fun initialize(): Boolean {
 
         if (detectedAddress == 0) {
-            val result = detect() ?: return false
+
+            val result = detect()
+                ?: return false
 
             detectedType = result.type
             detectedAddress = result.i2cAddress
@@ -135,41 +166,21 @@ class R82xxTuner(
 
         try {
 
-            /*
-             * R82xx 上电后的基础寄存器初始化。
-             *
-             * 这里采用连续写入的方式。
-             * 后续我们会根据官方 r82xx_init()
-             * 继续补齐完整初始化表。
-             */
-
-            val initRegisters = byteArrayOf(
-                0x83.toByte(),
-                0x32.toByte(),
-                0x75.toByte(),
-                0xC0.toByte(),
-                0x40.toByte(),
-                0xD6.toByte(),
-                0x6C.toByte(),
-                0xF5.toByte(),
-                0x63.toByte(),
-                0x75.toByte(),
-                0x68.toByte(),
-                0x6C.toByte(),
-                0x83.toByte(),
-                0x80.toByte(),
-                0x00.toByte(),
-                0x0F.toByte()
-            )
-
             if (!writeRegisters(
                     address = detectedAddress,
                     startRegister = REG_START,
-                    data = initRegisters
+                    data = INIT_REGISTERS
                 )
             ) {
                 return false
             }
+
+            /*
+             * rtl-sdr 初始化后会进入数字电视标准配置。
+             *
+             * PocketSDR 后续会针对 SDR 接收用途重新
+             * 配置带宽、IF 和 AGC。
+             */
 
             initialized = true
 
@@ -184,19 +195,20 @@ class R82xxTuner(
     /**
      * 设置中心频率。
      *
-     * 例如：
+     * 当前先完成频率参数计算和范围检查。
      *
-     * setFrequency(100_000_000)
-     *
-     * = 100 MHz
+     * 真正的 R82xx PLL 寄存器编码会在下一步接入。
      */
-    fun setFrequency(frequencyHz: Long): Boolean {
+    fun setFrequency(
+        frequencyHz: Long
+    ): Boolean {
 
         if (!initialized) {
             return false
         }
 
-        if (frequencyHz < MIN_FREQUENCY_HZ ||
+        if (
+            frequencyHz < MIN_FREQUENCY_HZ ||
             frequencyHz > MAX_FREQUENCY_HZ
         ) {
             return false
@@ -209,16 +221,15 @@ class R82xxTuner(
         try {
 
             /*
-             * 当前先计算目标 LO。
+             * R82xx 实际 LO 频率还需要加上 IF。
              *
-             * RTL2832U 的最终 IF/PLL 配置将在下一阶段
-             * 按官方 r82xx_set_freq() 完整移植。
+             * 当前 RTL2832U SDR 接收链路暂时使用
+             * 0 Hz IF 框架，后续会根据 RTL2832U
+             * 的实际 IF 设置调整。
              */
+            val loFrequencyHz = frequencyHz
 
-            val loFrequencyHz =
-                frequencyHz
-
-            if (!setPllFrequency(loFrequencyHz)) {
+            if (!configurePll(loFrequencyHz)) {
                 return false
             }
 
@@ -233,21 +244,15 @@ class R82xxTuner(
     }
 
     /**
-     * 设置 R82xx PLL。
+     * 当前版本的 PLL 配置入口。
      *
-     * 这里采用 R82xx 常见的分频计算方式。
+     * 不直接写未经验证的 PLL 参数。
      *
-     * 注意：
-     * 当前版本主要用于建立完整的软件结构和硬件通信链路。
-     * 下一步会继续加入官方实现中的：
-     *
-     * - VCO band
-     * - PLL integer
-     * - PLL fractional
-     * - reference divider
-     * - lock detection
+     * 下一阶段会把官方 r82xx_set_pll()
+     * 的整数分频、VCO、reference divider、
+     * fractional PLL 和 lock detection 完整移植进来。
      */
-    private fun setPllFrequency(
+    private fun configurePll(
         frequencyHz: Long
     ): Boolean {
 
@@ -255,46 +260,44 @@ class R82xxTuner(
             return false
         }
 
-        /*
-         * R82xx PLL 的基本参数。
-         *
-         * 当前使用 28.8 MHz 晶振。
-         */
-        val xtal = xtalFrequencyHz
-
-        if (xtal <= 0L) {
+        if (xtalFrequencyHz <= 0L) {
             return false
         }
 
         /*
-         * 计算整数 N。
+         * 这里只计算基础参数，暂不写 PLL。
          *
-         * 这里只建立计算框架。
-         * 完整寄存器编码将在下一阶段严格按照
-         * rtl-sdr 的 r82xx_set_pll() 完成。
+         * 防止未经验证的 PLL 参数直接写入
+         * 用户的实体 SDR。
          */
         val ratio =
-            frequencyHz.toDouble() / xtal.toDouble()
+            frequencyHz.toDouble() /
+                xtalFrequencyHz.toDouble()
 
-        val integerPart = ratio.toLong()
+        val integerPart =
+            ratio.toLong()
 
         val fractionalPart =
-            ((ratio - integerPart.toDouble()) * 65536.0)
-                .toLong()
-                .coerceIn(0L, 65535L)
+            (
+                (ratio - integerPart.toDouble()) *
+                    65536.0
+                ).toLong()
+                .coerceIn(
+                    0L,
+                    65535L
+                )
 
-        /*
-         * 目前暂不把未经完整验证的 PLL 参数写入硬件。
-         *
-         * 这样可以避免错误 PLL 配置导致设备进入异常状态。
-         *
-         * 下一阶段会把这里替换成经过验证的寄存器配置。
-         */
-        @Suppress("UNUSED_VARIABLE")
-        val calculatedIntegerPart = integerPart
+        if (integerPart <= 0L) {
+            return false
+        }
 
         @Suppress("UNUSED_VARIABLE")
-        val calculatedFractionalPart = fractionalPart
+        val calculatedIntegerPart =
+            integerPart
+
+        @Suppress("UNUSED_VARIABLE")
+        val calculatedFractionalPart =
+            fractionalPart
 
         return true
     }
@@ -322,10 +325,11 @@ class R82xxTuner(
             return null
         }
 
-        val data = control.i2cRead(
-            address,
-            length
-        ) ?: return null
+        val data =
+            control.i2cRead(
+                address,
+                length
+            ) ?: return null
 
         if (data.size != length) {
             return null
@@ -336,6 +340,9 @@ class R82xxTuner(
 
     /**
      * 连续写入 R82xx 寄存器。
+     *
+     * rtl-sdr 对 R82xx 使用最大 8 字节 I2C
+     * message 长度。
      */
     private fun writeRegisters(
         address: Int,
@@ -347,11 +354,6 @@ class R82xxTuner(
             return false
         }
 
-        /*
-         * R82xx 一次 I2C 消息长度受到限制。
-         *
-         * 当前分成小块写入。
-         */
         val maxChunk = 8
 
         var offset = 0
@@ -368,7 +370,10 @@ class R82xxTuner(
                 ByteArray(count + 1)
 
             packet[0] =
-                ((startRegister + offset) and 0xFF).toByte()
+                (
+                    (startRegister + offset) and
+                        0xFF
+                    ).toByte()
 
             for (i in 0 until count) {
 
@@ -391,10 +396,9 @@ class R82xxTuner(
     }
 
     /**
-     * 当前阶段只做基础通信识别。
+     * 当前只负责判断 R82xx I2C 通信是否有响应。
      *
-     * 不把 R820T 和 R820T2 过度区分，
-     * 避免因为不同批次芯片的寄存器差异造成误判。
+     * R820T / R820T2 的严格型号识别后续处理。
      */
     private fun detectR82xxType(
         registers: ByteArray
@@ -408,7 +412,9 @@ class R82xxTuner(
 
         for (value in registers) {
 
-            if ((value.toInt() and 0xFF) != 0) {
+            if (
+                (value.toInt() and 0xFF) != 0
+            ) {
                 nonZeroCount++
             }
         }
@@ -417,16 +423,6 @@ class R82xxTuner(
             return TunerType.UNKNOWN
         }
 
-        /*
-         * 当前无法仅凭这组读取可靠区分：
-         *
-         * R820T
-         * R820T2
-         *
-         * 因此先统一视为 R820T2/R820T 系列。
-         *
-         * 后续根据官方 r82xx 初始化流程进一步识别。
-         */
         return TunerType.R820T2
     }
 
