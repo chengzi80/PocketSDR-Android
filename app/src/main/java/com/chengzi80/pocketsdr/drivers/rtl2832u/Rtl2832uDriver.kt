@@ -24,7 +24,7 @@ class Rtl2832uDriver(
 
     val isInitialized: Boolean
         get() =
-            demodulator?.isInitialized == true
+            demodulator?.isInitialized() == true
 
     val deviceInfo:
             Rtl2832uUsbDevice?
