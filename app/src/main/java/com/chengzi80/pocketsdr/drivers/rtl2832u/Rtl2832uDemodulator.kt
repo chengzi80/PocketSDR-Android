@@ -450,36 +450,35 @@ class Rtl2832uDemodulator(
             ifFrequency and
                 0x3FFFFF
 
-        if (
-            !control.writeDemodRegisterByte(
-                PAGE_1,
-                REG_IF_FREQ_0,
-                ((value shr 16) and 0x3F)
-            )
-        ) {
-            return false
-        }
+     if (
+    !control.writeDemodRegisterByte(
+        PAGE_1,
+        REG_IF_FREQ_0,
+        ((value shr 16) and 0x3F).toInt()
+    )
+) {
+    return false
+}
 
-        if (
-            !control.writeDemodRegisterByte(
-                PAGE_1,
-                REG_IF_FREQ_1,
-                ((value shr 8) and 0xFF)
-            )
-        ) {
-            return false
-        }
+if (
+    !control.writeDemodRegisterByte(
+        PAGE_1,
+        REG_IF_FREQ_1,
+        ((value shr 8) and 0xFF).toInt()
+    )
+) {
+    return false
+}
 
-        if (
-            !control.writeDemodRegisterByte(
-                PAGE_1,
-                REG_IF_FREQ_2,
-                value and 0xFF
-            )
-        ) {
-            return false
-        }
-
+if (
+    !control.writeDemodRegisterByte(
+        PAGE_1,
+        REG_IF_FREQ_2,
+        (value and 0xFF).toInt()
+    )
+) {
+    return false
+}
         return true
     }
 
