@@ -17,6 +17,17 @@ class Rtl2832uDriver(
 
     private var tuner: R82xxTuner? = null
 
+    private var sampleReader: Rtl2832uSampleReader? = null
+
+    private var sampleConfig =
+        Rtl2832uSampleConfig.default()
+
+    private var detectedTunerType =
+        R82xxTuner.TunerType.UNKNOWN
+
+    private var detectedTunerAddress =
+        0
+
     val isOpen: Boolean
         get() = connection != null
 
@@ -24,6 +35,10 @@ class Rtl2832uDriver(
         get() =
             demodulator?.isInitialized() == true &&
                 tuner?.isInitialized() == true
+
+    val isReadingSamples: Boolean
+        get() =
+            sampleReader?.isRunning() == true
 
     val deviceInfo: Rtl2832uUsbDevice?
         get() = usbDevice
@@ -48,7 +63,9 @@ class Rtl2832uDriver(
                 true
             )
         ) {
+
             conn.close()
+
             return false
         }
 
@@ -75,7 +92,7 @@ class Rtl2832uDriver(
     }
 
     /**
-     * 初始化整个 RTL2832U + R82xx 接收链路。
+     * 初始化 RTL2832U + R82xx。
      */
     fun initialize(): Boolean {
 
@@ -88,86 +105,78 @@ class Rtl2832uDriver(
                 ?: return false
 
         /*
-         * 第一步：
-         * 初始化 RTL2832U Demodulator。
+         * 初始化 RTL2832U。
          */
         if (!demod.initialize()) {
             return false
         }
 
         /*
-         * 第二步：
          * 检测 R82xx。
          */
         val detection =
             tunerDriver.detect()
                 ?: return false
 
-        /*
-         * 第三步：
-         * 初始化 R82xx。
-         */
-        if (!tunerDriver.initialize()) {
-            return false
-        }
-
-        /*
-         * 目前只是记录检测结果。
-         *
-         * 后续可以通过 Driver API 对外提供。
-         */
         detectedTunerType =
             detection.type
 
         detectedTunerAddress =
             detection.i2cAddress
 
+        /*
+         * 初始化 R82xx。
+         */
+        if (!tunerDriver.initialize()) {
+            return false
+        }
+
         return true
-    }
-
-    private var detectedTunerType =
-        R82xxTuner.TunerType.UNKNOWN
-
-    private var detectedTunerAddress =
-        0
-
-    /**
-     * 获取 R82xx 类型。
-     */
-    fun getTunerType():
-        R82xxTuner.TunerType {
-
-        return detectedTunerType
-    }
-
-    /**
-     * 获取 R82xx I2C 地址。
-     */
-    fun getTunerI2cAddress(): Int {
-
-        return detectedTunerAddress
     }
 
     /**
      * 设置中心频率。
-     *
-     * 例如：
-     *
-     * 100_000_000L
-     *
-     * = 100 MHz
      */
     fun setFrequency(
         frequencyHz: Long
     ): Boolean {
 
-        return tuner?.setFrequency(
-            frequencyHz
-        ) == true
+        if (!isInitialized) {
+            return false
+        }
+
+        if (
+            frequencyHz <
+            Rtl2832uSampleConfig.MIN_FREQUENCY_HZ
+        ) {
+            return false
+        }
+
+        if (
+            frequencyHz >
+            Rtl2832uSampleConfig.MAX_FREQUENCY_HZ
+        ) {
+            return false
+        }
+
+        if (
+            tuner?.setFrequency(
+                frequencyHz
+            ) != true
+        ) {
+            return false
+        }
+
+        sampleConfig =
+            sampleConfig.copy(
+                frequencyHz = frequencyHz
+            )
+
+        return true
     }
 
     /**
-     * 获取当前中心频率。
+     * 获取中心频率。
      */
     fun getFrequencyHz(): Long {
 
@@ -176,33 +185,164 @@ class Rtl2832uDriver(
     }
 
     /**
-     * 获取底层控制对象。
+     * 设置采样率。
+     *
+     * 当前阶段先保存配置。
+     *
+     * RTL2832U 的完整采样率寄存器配置
+     * 下一步接入。
      */
+    fun setSampleRate(
+        sampleRateHz: Long
+    ): Boolean {
+
+        if (
+            sampleRateHz <
+            Rtl2832uSampleConfig.MIN_SAMPLE_RATE_HZ
+        ) {
+            return false
+        }
+
+        if (
+            sampleRateHz >
+            Rtl2832uSampleConfig.MAX_SAMPLE_RATE_HZ
+        ) {
+            return false
+        }
+
+        sampleConfig =
+            sampleConfig.copy(
+                sampleRateHz = sampleRateHz
+            )
+
+        return true
+    }
+
+    /**
+     * 获取当前采样率。
+     */
+    fun getSampleRateHz(): Long {
+
+        return sampleConfig.sampleRateHz
+    }
+
+    /**
+     * 获取当前完整采样配置。
+     */
+    fun getSampleConfig():
+        Rtl2832uSampleConfig {
+
+        return sampleConfig
+    }
+
+    /**
+     * 开始读取 IQ 数据。
+     */
+    fun startSampleReading(
+        onSamples: (ByteArray, Int) -> Unit,
+        onError: (String) -> Unit
+    ): Boolean {
+
+        if (!isInitialized) {
+            onError(
+                "SDR设备尚未初始化"
+            )
+            return false
+        }
+
+        if (connection == null) {
+            onError(
+                "USB设备连接不存在"
+            )
+            return false
+        }
+
+        if (usbDevice == null) {
+            onError(
+                "USB设备信息不存在"
+            )
+            return false
+        }
+
+        if (
+            sampleReader?.isRunning() == true
+        ) {
+            return false
+        }
+
+        val reader =
+            Rtl2832uSampleReader(
+                connection = connection!!,
+                device = usbDevice!!
+            )
+
+        sampleReader =
+            reader
+
+        return reader.start(
+            bufferSize =
+                sampleConfig.bufferSize,
+
+            timeout =
+                sampleConfig.usbTimeoutMs,
+
+            onSamples =
+                onSamples,
+
+            onError =
+                onError
+        )
+    }
+
+    /**
+     * 停止读取 IQ。
+     */
+    fun stopSampleReading() {
+
+        sampleReader?.stop()
+
+        sampleReader = null
+    }
+
+    /**
+     * 获取当前已经读取的字节数。
+     */
+    fun getTotalSampleBytes(): Long {
+
+        return sampleReader?.getTotalBytes()
+            ?: 0L
+    }
+
+    fun getTunerType():
+        R82xxTuner.TunerType {
+
+        return detectedTunerType
+    }
+
+    fun getTunerI2cAddress(): Int {
+
+        return detectedTunerAddress
+    }
+
     fun getControl():
         Rtl2832uUsbControl? {
 
         return control
     }
 
-    /**
-     * 获取 USB Connection。
-     */
     fun getConnection():
         UsbDeviceConnection? {
 
         return connection
     }
 
-    /**
-     * 获取 Tuner。
-     */
     fun getTuner(): R82xxTuner? {
 
         return tuner
     }
 
     /**
-     * 重置 Demodulator。
+     * 重置 RTL2832U Demodulator。
      */
     fun resetDemodulator(): Boolean {
 
@@ -215,16 +355,41 @@ class Rtl2832uDriver(
      */
     fun close() {
 
+        /*
+         * 先停止 IQ 数据读取。
+         */
         try {
+
+            sampleReader?.stop()
+
+        } catch (_: Exception) {
+        }
+
+        sampleReader = null
+
+        /*
+         * 重置 Tuner。
+         */
+        try {
+
             tuner?.reset()
+
         } catch (_: Exception) {
         }
 
+        /*
+         * 重置 Demodulator。
+         */
         try {
+
             demodulator?.reset()
+
         } catch (_: Exception) {
         }
 
+        /*
+         * 释放 USB Interface。
+         */
         try {
 
             val conn =
@@ -246,8 +411,13 @@ class Rtl2832uDriver(
         } catch (_: Exception) {
         }
 
+        /*
+         * 关闭 USB Connection。
+         */
         try {
+
             connection?.close()
+
         } catch (_: Exception) {
         }
 
@@ -266,5 +436,8 @@ class Rtl2832uDriver(
 
         detectedTunerAddress =
             0
+
+        sampleConfig =
+            Rtl2832uSampleConfig.default()
     }
 }
