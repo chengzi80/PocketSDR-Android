@@ -8,13 +8,10 @@ class Rtl2832uDriver(
 ) {
 
     private var connection: UsbDeviceConnection? = null
-
     private var usbDevice: Rtl2832uUsbDevice? = null
 
     private var control: Rtl2832uUsbControl? = null
-
     private var demodulator: Rtl2832uDemodulator? = null
-
     private var tuner: R82xxTuner? = null
 
     private var sampleReader: Rtl2832uSampleReader? = null
@@ -25,8 +22,10 @@ class Rtl2832uDriver(
     private var detectedTunerType =
         R82xxTuner.TunerType.UNKNOWN
 
-    private var detectedTunerAddress =
-        0
+    private var detectedTunerAddress = 0
+
+    @Volatile
+    private var lastError: String? = null
 
     val isOpen: Boolean
         get() = connection != null
@@ -43,19 +42,22 @@ class Rtl2832uDriver(
     val deviceInfo: Rtl2832uUsbDevice?
         get() = usbDevice
 
-    /**
-     * 打开 RTL2832U USB 设备。
-     */
     fun open(
         device: Rtl2832uUsbDevice
     ): Boolean {
 
         close()
 
+        lastError = null
+
         val conn =
             usbManager.openDevice(
                 device.device
-            ) ?: return false
+            ) ?: run {
+                lastError =
+                    "USB设备无法打开"
+                return false
+            }
 
         if (
             !conn.claimInterface(
@@ -66,57 +68,80 @@ class Rtl2832uDriver(
 
             conn.close()
 
+            lastError =
+                "无法占用USB接口"
+
             return false
         }
 
         connection = conn
-
         usbDevice = device
 
-        control =
+        val usbControl =
             Rtl2832uUsbControl(
                 conn
             )
 
+        control =
+            usbControl
+
         demodulator =
             Rtl2832uDemodulator(
-                control!!
+                usbControl
             )
 
         tuner =
             R82xxTuner(
-                control!!
+                usbControl
             )
 
         return true
     }
 
-    /**
-     * 初始化 RTL2832U + R82xx。
-     */
     fun initialize(): Boolean {
 
         val demod =
-            demodulator
-                ?: return false
+            demodulator ?: run {
+                lastError =
+                    "RTL2832U Demodulator不存在"
+                return false
+            }
 
         val tunerDriver =
-            tuner
-                ?: return false
+            tuner ?: run {
+                lastError =
+                    "R820T2 Tuner不存在"
+                return false
+            }
 
         /*
-         * 初始化 RTL2832U Demodulator。
+         * Step 1:
+         * initialize RTL2832U.
          */
-        if (!demod.initialize()) {
+        if (
+            !demod.initialize()
+        ) {
+
+            lastError =
+                "RTL2832U初始化失败"
+
             return false
         }
 
         /*
-         * 检测 R82xx。
+         * Step 2:
+         * detect R82xx tuner.
          */
         val detection =
             tunerDriver.detect()
-                ?: return false
+
+                ?: run {
+
+                    lastError =
+                        "无法检测R820T/R820T2调谐器"
+
+                    return false
+                }
 
         detectedTunerType =
             detection.type
@@ -125,34 +150,63 @@ class Rtl2832uDriver(
             detection.i2cAddress
 
         /*
-         * 初始化 R82xx。
+         * Step 3:
+         * initialize tuner.
          */
-        if (!tunerDriver.initialize()) {
+        if (
+            !tunerDriver.initialize()
+        ) {
+
+            lastError =
+                "R820T/R820T2初始化失败"
+
             return false
         }
 
         /*
-         * 把默认采样率真正写入 RTL2832U。
+         * Step 4:
+         * configure default sample rate.
          */
         if (
             !demod.setSampleRate(
                 sampleConfig.sampleRateHz
             )
         ) {
+
+            lastError =
+                "RTL2832U采样率设置失败"
+
             return false
         }
+
+        /*
+         * Step 5:
+         * configure default frequency.
+         */
+        if (
+            !tunerDriver.setFrequency(
+                sampleConfig.frequencyHz
+            )
+        ) {
+
+            lastError =
+                "R820T2默认频率设置失败"
+
+            return false
+        }
+
+        lastError = null
 
         return true
     }
 
-    /**
-     * 设置中心频率。
-     */
     fun setFrequency(
         frequencyHz: Long
     ): Boolean {
 
         if (!isInitialized) {
+            lastError =
+                "SDR设备尚未初始化"
             return false
         }
 
@@ -160,6 +214,10 @@ class Rtl2832uDriver(
             frequencyHz <
             Rtl2832uSampleConfig.MIN_FREQUENCY_HZ
         ) {
+
+            lastError =
+                "频率低于设备支持范围"
+
             return false
         }
 
@@ -167,42 +225,54 @@ class Rtl2832uDriver(
             frequencyHz >
             Rtl2832uSampleConfig.MAX_FREQUENCY_HZ
         ) {
+
+            lastError =
+                "频率高于设备支持范围"
+
             return false
         }
 
+        val tunerDriver =
+            tuner ?: run {
+                lastError =
+                    "Tuner不存在"
+                return false
+            }
+
         if (
-            tuner?.setFrequency(
+            !tunerDriver.setFrequency(
                 frequencyHz
-            ) != true
+            )
         ) {
+
+            lastError =
+                "R820T2调频失败"
+
             return false
         }
 
         sampleConfig =
             sampleConfig.copy(
-                frequencyHz = frequencyHz
+                frequencyHz =
+                    frequencyHz
             )
+
+        lastError = null
 
         return true
     }
 
-    /**
-     * 获取当前中心频率。
-     */
-    fun getFrequencyHz(): Long {
-
-        return tuner?.getCurrentFrequencyHz()
+    fun getFrequencyHz(): Long =
+        tuner?.getCurrentFrequencyHz()
             ?: 0L
-    }
 
-    /**
-     * 设置采样率。
-     */
     fun setSampleRate(
         sampleRateHz: Long
     ): Boolean {
 
         if (!isInitialized) {
+            lastError =
+                "SDR设备尚未初始化"
             return false
         }
 
@@ -210,6 +280,8 @@ class Rtl2832uDriver(
             sampleRateHz <
             Rtl2832uSampleConfig.MIN_SAMPLE_RATE_HZ
         ) {
+            lastError =
+                "采样率低于设备支持范围"
             return false
         }
 
@@ -217,110 +289,124 @@ class Rtl2832uDriver(
             sampleRateHz >
             Rtl2832uSampleConfig.MAX_SAMPLE_RATE_HZ
         ) {
+            lastError =
+                "采样率高于设备支持范围"
+            return false
+        }
+
+        if (
+            sampleRateHz >
+                300_000L &&
+            sampleRateHz <=
+                900_000L
+        ) {
+            lastError =
+                "RTL2832U不支持300001~900000 Hz采样率"
             return false
         }
 
         val demod =
-            demodulator
-                ?: return false
+            demodulator ?: run {
+                lastError =
+                    "Demodulator不存在"
+                return false
+            }
 
         if (
             !demod.setSampleRate(
                 sampleRateHz
             )
         ) {
+
+            lastError =
+                "RTL2832U采样率设置失败"
+
             return false
         }
 
         sampleConfig =
             sampleConfig.copy(
-                sampleRateHz = sampleRateHz
+                sampleRateHz =
+                    demod.getSampleRateHz()
             )
+
+        lastError = null
 
         return true
     }
 
-    /**
-     * 获取当前采样率。
-     */
-    fun getSampleRateHz(): Long {
+    fun getSampleRateHz(): Long =
+        sampleConfig.sampleRateHz
 
-        return sampleConfig.sampleRateHz
-    }
-
-    /**
-     * 获取完整采样配置。
-     */
     fun getSampleConfig():
-        Rtl2832uSampleConfig {
+        Rtl2832uSampleConfig =
+        sampleConfig
 
-        return sampleConfig
-    }
-
-    /**
-     * 开始读取 IQ 数据。
-     *
-     * 顺序：
-     *
-     * 1. 检查设备
-     * 2. 设置采样率
-     * 3. 设置中心频率
-     * 4. Reset USB endpoint
-     * 5. 开始 Bulk IN
-     */
     fun startSampleReading(
-        onSamples: (ByteArray, Int) -> Unit,
-        onError: (String) -> Unit
+        onSamples: (
+            ByteArray,
+            Int
+        ) -> Unit,
+
+        onError: (
+            String
+        ) -> Unit
     ): Boolean {
 
         if (!isInitialized) {
 
-            onError(
-                "SDR设备尚未初始化"
-            )
+            val message =
+                lastError
+                    ?: "SDR设备尚未初始化"
+
+            onError(message)
 
             return false
         }
 
-        if (connection == null) {
+        val conn =
+            connection ?: run {
 
-            onError(
-                "USB设备连接不存在"
-            )
+                onError(
+                    "USB设备连接不存在"
+                )
 
-            return false
-        }
+                return false
+            }
 
-        if (usbDevice == null) {
+        val device =
+            usbDevice ?: run {
 
-            onError(
-                "USB设备信息不存在"
-            )
+                onError(
+                    "USB设备信息不存在"
+                )
 
-            return false
-        }
+                return false
+            }
 
         if (
             sampleReader?.isRunning() == true
         ) {
 
+            onError(
+                "IQ读取已经在运行"
+            )
+
             return false
         }
 
         val demod =
-            demodulator
+            demodulator ?: run {
 
-                ?: run {
+                onError(
+                    "RTL2832U Demodulator不存在"
+                )
 
-                    onError(
-                        "RTL2832U Demodulator不存在"
-                    )
-
-                    return false
-                }
+                return false
+            }
 
         /*
-         * 重新确认采样率。
+         * Re-apply sample rate.
          */
         if (
             !demod.setSampleRate(
@@ -336,7 +422,7 @@ class Rtl2832uDriver(
         }
 
         /*
-         * 设置中心频率。
+         * Tune tuner.
          */
         if (
             !setFrequency(
@@ -345,15 +431,16 @@ class Rtl2832uDriver(
         ) {
 
             onError(
-                "SDR中心频率设置失败"
+                lastError
+                    ?: "SDR中心频率设置失败"
             )
 
             return false
         }
 
         /*
-         * 官方 rtl-sdr 在开始读取 IQ
-         * 之前必须 reset endpoint。
+         * Mandatory endpoint reset before
+         * starting sample acquisition.
          */
         if (
             !demod.resetBuffer()
@@ -366,13 +453,10 @@ class Rtl2832uDriver(
             return false
         }
 
-        /*
-         * 创建 IQ reader。
-         */
         val reader =
             Rtl2832uSampleReader(
-                connection = connection!!,
-                device = usbDevice!!
+                connection = conn,
+                device = device
             )
 
         sampleReader =
@@ -386,16 +470,35 @@ class Rtl2832uDriver(
                 timeout =
                     sampleConfig.usbTimeoutMs,
 
-                onSamples =
-                    onSamples,
+                onSamples = {
+                        data,
+                        count ->
 
-                onError =
-                    onError
+                    onSamples(
+                        data,
+                        count
+                    )
+                },
+
+                onError = {
+                    error ->
+
+                    lastError =
+                        error
+
+                    onError(
+                        error
+                    )
+                }
             )
 
         if (!started) {
 
             sampleReader = null
+
+            onError(
+                "无法启动USB IQ读取线程"
+            )
 
             return false
         }
@@ -403,9 +506,6 @@ class Rtl2832uDriver(
         return true
     }
 
-    /**
-     * 停止读取 IQ。
-     */
     fun stopSampleReading() {
 
         sampleReader?.stop()
@@ -413,108 +513,60 @@ class Rtl2832uDriver(
         sampleReader = null
     }
 
-    /**
-     * 获取已经读取的原始 IQ 字节数。
-     */
-    fun getTotalSampleBytes(): Long {
-
-        return sampleReader?.getTotalBytes()
+    fun getTotalSampleBytes(): Long =
+        sampleReader?.getTotalBytes()
             ?: 0L
-    }
 
-    /**
-     * 获取 Tuner 类型。
-     */
     fun getTunerType():
-        R82xxTuner.TunerType {
+        R82xxTuner.TunerType =
+        detectedTunerType
 
-        return detectedTunerType
-    }
+    fun getTunerI2cAddress(): Int =
+        detectedTunerAddress
 
-    /**
-     * 获取 Tuner I2C 地址。
-     */
-    fun getTunerI2cAddress(): Int {
-
-        return detectedTunerAddress
-    }
-
-    /**
-     * 获取底层 USB 控制对象。
-     */
-    fun getControl():
-        Rtl2832uUsbControl? {
-
-        return control
-    }
-
-    /**
-     * 获取 USB Connection。
-     */
-    fun getConnection():
-        UsbDeviceConnection? {
-
-        return connection
-    }
-
-    /**
-     * 获取 R82xx Tuner。
-     */
-    fun getTuner():
-        R82xxTuner? {
-
-        return tuner
-    }
-
-    /**
-     * 重置 Demodulator。
-     */
-    fun resetDemodulator(): Boolean {
-
-        return demodulator?.reset()
+    fun getTunerPllLock(): Boolean =
+        tuner?.hasPllLock()
             ?: false
-    }
 
-    /**
-     * 关闭设备。
-     */
+    fun getControl():
+        Rtl2832uUsbControl? =
+        control
+
+    fun getConnection():
+        UsbDeviceConnection? =
+        connection
+
+    fun getTuner():
+        R82xxTuner? =
+        tuner
+
+    fun getLastError():
+        String? =
+        lastError
+
+    fun resetDemodulator(): Boolean =
+        demodulator?.reset()
+            ?: false
+
     fun close() {
 
-        /*
-         * 停止 IQ。
-         */
         try {
-
             sampleReader?.stop()
-
         } catch (_: Exception) {
         }
 
         sampleReader = null
 
-        /*
-         * 重置 Tuner。
-         */
         try {
-
             tuner?.reset()
-
         } catch (_: Exception) {
         }
 
-        /*
-         * 重置 Demodulator。
-         */
         try {
-
             demodulator?.reset()
-
         } catch (_: Exception) {
         }
 
-        /*
-         * 释放 USB Interface。
-         */
         try {
 
             val conn =
@@ -536,31 +588,23 @@ class Rtl2832uDriver(
         } catch (_: Exception) {
         }
 
-        /*
-         * 关闭 USB Connection。
-         */
         try {
-
             connection?.close()
-
         } catch (_: Exception) {
         }
 
         connection = null
-
         usbDevice = null
-
         control = null
-
         demodulator = null
-
         tuner = null
 
         detectedTunerType =
             R82xxTuner.TunerType.UNKNOWN
 
-        detectedTunerAddress =
-            0
+        detectedTunerAddress = 0
+
+        lastError = null
 
         sampleConfig =
             Rtl2832uSampleConfig.default()
