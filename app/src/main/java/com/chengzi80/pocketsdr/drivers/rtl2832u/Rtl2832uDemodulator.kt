@@ -7,34 +7,23 @@ class Rtl2832uDemodulator(
     companion object {
 
         private const val DEFAULT_SAMPLE_RATE_HZ = 2_048_000L
-
         private const val MIN_SAMPLE_RATE_HZ = 225_001L
-
         private const val MAX_SAMPLE_RATE_HZ = 3_200_000L
 
-        /*
-         * RTL2832U demodulator registers
-         */
+        private const val RTL_XTAL_HZ = 28_800_000L
 
         private const val PAGE_0 = 0
-
         private const val PAGE_1 = 1
 
-        /*
-         * RTL2832U IF frequency registers.
-         *
-         * 0x19 / 0x1A / 0x1B
-         */
         private const val REG_IF_FREQ_0 = 0x19
-
         private const val REG_IF_FREQ_1 = 0x1A
-
         private const val REG_IF_FREQ_2 = 0x1B
 
-        /*
-         * USB / FIFO configuration
-         */
-        private const val USB_BLOCK = Rtl2832uUsbControl.BLOCK_USB
+        private const val USB_BLOCK =
+            Rtl2832uUsbControl.BLOCK_USB
+
+        private const val USB_SYS_BLOCK =
+            Rtl2832uUsbControl.BLOCK_SYS
 
         private const val REG_USB_SYSCTL =
             Rtl2832uUsbControl.REG_USB_SYSCTL
@@ -53,6 +42,16 @@ class Rtl2832uDemodulator(
 
         private const val REG_USB_EPA_FIFO_CFG =
             Rtl2832uUsbControl.REG_USB_EPA_FIFO_CFG
+
+        /*
+         * RTL2832U demodulator registers used during
+         * initialization.
+         */
+        private const val REG_DEMOD_CTL =
+            Rtl2832uUsbControl.REG_DEMOD_CTL
+
+        private const val REG_DEMOD_CTL_1 =
+            Rtl2832uUsbControl.REG_DEMOD_CTL_1
     }
 
     private var initialized = false
@@ -60,16 +59,19 @@ class Rtl2832uDemodulator(
     private var currentSampleRateHz =
         DEFAULT_SAMPLE_RATE_HZ
 
-    /**
-     * 初始化 RTL2832U。
-     */
     fun initialize(): Boolean {
 
         initialized = false
 
         /*
-         * 启用 USB 接收系统。
+         * -------------------------------------------------
+         * USB / endpoint initialization
+         * -------------------------------------------------
+         *
+         * These values follow the initialization sequence
+         * used by rtl-sdr for RTL2832 based devices.
          */
+
         if (
             !control.writeRegisterByte(
                 USB_BLOCK,
@@ -81,7 +83,7 @@ class Rtl2832uDemodulator(
         }
 
         /*
-         * 设置 USB endpoint 最大包长度。
+         * Endpoint maximum packet size.
          */
         if (
             !control.writeRegister16(
@@ -94,7 +96,7 @@ class Rtl2832uDemodulator(
         }
 
         /*
-         * 配置 USB endpoint。
+         * Enable endpoint.
          */
         if (
             !control.writeRegister16(
@@ -107,12 +109,15 @@ class Rtl2832uDemodulator(
         }
 
         /*
-         * 初始化 Demodulator。
+         * -------------------------------------------------
+         * Demodulator power / reset
+         * -------------------------------------------------
          */
+
         if (
             !control.writeRegisterByte(
-                Rtl2832uUsbControl.BLOCK_SYS,
-                Rtl2832uUsbControl.REG_DEMOD_CTL_1,
+                USB_SYS_BLOCK,
+                REG_DEMOD_CTL_1,
                 0x22
             )
         ) {
@@ -121,8 +126,8 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeRegisterByte(
-                Rtl2832uUsbControl.BLOCK_SYS,
-                Rtl2832uUsbControl.REG_DEMOD_CTL,
+                USB_SYS_BLOCK,
+                REG_DEMOD_CTL,
                 0xE8
             )
         ) {
@@ -130,34 +135,33 @@ class Rtl2832uDemodulator(
         }
 
         /*
-         * Demodulator 基础配置。
+         * Soft reset.
          */
         if (
-            !control.writeDemodRegisterByte(
-                1,
-                0x01,
-                0x14
-            )
+            !softReset()
         ) {
             return false
         }
 
+        /*
+         * Disable digital AGC during initial setup.
+         */
         if (
             !control.writeDemodRegisterByte(
-                1,
-                0x01,
-                0x10
+                PAGE_1,
+                0x04,
+                0x00
             )
         ) {
             return false
         }
 
         /*
-         * AGC / IF 基础配置。
+         * Disable spectrum inversion.
          */
         if (
             !control.writeDemodRegisterByte(
-                1,
+                PAGE_1,
                 0x15,
                 0x00
             )
@@ -165,9 +169,12 @@ class Rtl2832uDemodulator(
             return false
         }
 
+        /*
+         * Disable adjacent channel rejection.
+         */
         if (
             !control.writeDemodRegister(
-                1,
+                PAGE_1,
                 0x16,
                 byteArrayOf(
                     0x00,
@@ -178,13 +185,17 @@ class Rtl2832uDemodulator(
             return false
         }
 
+        /*
+         * Clear a number of baseband registers used by
+         * the RTL2832 demodulator.
+         */
         for (
             address in 0x16..0x1B
         ) {
 
             if (
                 !control.writeDemodRegisterByte(
-                    1,
+                    PAGE_1,
                     address,
                     0x00
                 )
@@ -194,11 +205,11 @@ class Rtl2832uDemodulator(
         }
 
         /*
-         * RTL2832U 基础数字配置。
+         * Default demodulator settings.
          */
         if (
             !control.writeDemodRegisterByte(
-                0,
+                PAGE_0,
                 0x19,
                 0x05
             )
@@ -208,7 +219,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                1,
+                PAGE_1,
                 0x93,
                 0xF0
             )
@@ -218,7 +229,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                1,
+                PAGE_1,
                 0x94,
                 0x0F
             )
@@ -228,7 +239,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                1,
+                PAGE_1,
                 0x11,
                 0x00
             )
@@ -238,17 +249,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                1,
-                0x04,
-                0x00
-            )
-        ) {
-            return false
-        }
-
-        if (
-            !control.writeDemodRegisterByte(
-                0,
+                PAGE_0,
                 0x61,
                 0x60
             )
@@ -258,7 +259,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                0,
+                PAGE_0,
                 0x06,
                 0x80
             )
@@ -268,7 +269,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                1,
+                PAGE_1,
                 0xB1,
                 0x1B
             )
@@ -278,7 +279,7 @@ class Rtl2832uDemodulator(
 
         if (
             !control.writeDemodRegisterByte(
-                0,
+                PAGE_0,
                 0x0D,
                 0x83
             )
@@ -287,7 +288,7 @@ class Rtl2832uDemodulator(
         }
 
         /*
-         * 默认采样率。
+         * Set the default sample rate.
          */
         if (
             !setSampleRate(
@@ -303,120 +304,185 @@ class Rtl2832uDemodulator(
     }
 
     /**
-     * 设置 RTL2832U 采样率。
+     * Set RTL2832U sample rate.
      *
-     * 官方 rtl-sdr 的采样率范围：
+     * This follows the algorithm used by rtl-sdr:
      *
-     * 225001 - 300000 Hz
-     * 900001 - 3200000 Hz
+     *   rsamp_ratio =
+     *       (rtl_xtal * 2^22) / sample_rate
      *
-     * 其中 300001 - 900000 Hz 不属于正常支持范围。
+     *   rsamp_ratio &= 0x0ffffffc
+     *
+     * Then the 32-bit ratio is written as:
+     *
+     *   0x9F : high 16 bits
+     *   0xA1 : low 16 bits
+     *
+     * on demodulator page 1.
      */
     fun setSampleRate(
         sampleRateHz: Long
     ): Boolean {
 
+        /*
+         * RTL2832U has a discontinuous valid sample-rate
+         * range. 900001..3200000 Hz is valid, while
+         * 300001..900000 Hz is not supported by the
+         * hardware resampler.
+         */
         if (
-            sampleRateHz <
-            MIN_SAMPLE_RATE_HZ
+            sampleRateHz <= 225_000L
         ) {
             return false
         }
 
         if (
-            sampleRateHz >
-            MAX_SAMPLE_RATE_HZ
+            sampleRateHz > MAX_SAMPLE_RATE_HZ
+        ) {
+            return false
+        }
+
+        if (
+            sampleRateHz > 300_000L &&
+            sampleRateHz <= 900_000L
         ) {
             return false
         }
 
         /*
-         * RTL2832U 使用 28.8 MHz 时钟。
+         * Official rtl-sdr calculation:
          *
-         * rsamp_ratio =
-         *
-         * 28800000 * 2^22 / sample_rate
+         * (28.8 MHz * 2^22) / sample rate
          */
-        val ratio =
+        val numerator =
+            RTL_XTAL_HZ *
+                (1L shl 22)
+
+        if (
+            numerator <= 0L
+        ) {
+            return false
+        }
+
+        var ratio =
+            numerator /
+                sampleRateHz
+
+        /*
+         * Hardware limitation:
+         *
+         * lower two bits are forced to zero.
+         */
+        ratio =
+            ratio and
+                0x0FFFFFFCL
+
+        if (
+            ratio <= 0L
+        ) {
+            return false
+        }
+
+        /*
+         * Calculate the actual sample rate produced
+         * by the RTL2832U.
+         *
+         * This is important because the requested rate
+         * is not always exactly achievable.
+         */
+        val realRatio =
+            ratio or
+                (
+                    (ratio and 0x08000000L)
+                        shl 1
+                    )
+
+        if (
+            realRatio <= 0L
+        ) {
+            return false
+        }
+
+        val realRate =
+            numerator /
+                realRatio
+
+        if (
+            realRate <= 0L
+        ) {
+            return false
+        }
+
+        /*
+         * The hardware writes the ratio as two
+         * little-endian 16-bit values.
+         *
+         * 0x9F = high 16 bits
+         * 0xA1 = low 16 bits
+         */
+        val high =
             (
-                28_800_000_000_000L /
-                    sampleRateHz
-                )
+                (ratio shr 16) and
+                    0xFFFFL
+                ).toInt()
 
-        if (ratio <= 0L) {
-            return false
-        }
+        val low =
+            (
+                ratio and
+                    0xFFFFL
+                ).toInt()
 
-        /*
-         * RTL2832U 使用 22-bit ratio。
-         */
-        val ratio22 =
-            ratio and 0x0FFFFFFF
-
-        /*
-         * 写入采样率 ratio。
-         *
-         * RTL2832U 的 rsamp_ratio 为
-         * 28-bit 固定点数。
-         */
-        val ratioBytes =
-            byteArrayOf(
-                (ratio22 and 0xFF).toByte(),
-
-                ((ratio22 shr 8) and 0xFF)
-                    .toByte(),
-
-                ((ratio22 shr 16) and 0xFF)
-                    .toByte(),
-
-                ((ratio22 shr 24) and 0x0F)
-                    .toByte()
-            )
-
-        /*
-         * RTL2832U samplerate ratio registers
-         *
-         * Page 1:
-         * 0x9F - 0xA2
-         */
         if (
             !control.writeDemodRegister(
                 PAGE_1,
                 0x9F,
-                ratioBytes
+                byteArrayOf(
+                    (high and 0xFF).toByte(),
+                    ((high shr 8) and 0xFF).toByte()
+                )
+            )
+        ) {
+            return false
+        }
+
+        if (
+            !control.writeDemodRegister(
+                PAGE_1,
+                0xA1,
+                byteArrayOf(
+                    (low and 0xFF).toByte(),
+                    ((low shr 8) and 0xFF).toByte()
+                )
             )
         ) {
             return false
         }
 
         /*
-         * 根据采样率设置数字滤波器。
-         *
-         * 2.048 MHz 是 RTL-SDR 最常用的默认值。
-         *
-         * 后续可以进一步按照官方
-         * rtl2832_set_sample_rate()
-         * 完整移植滤波器系数。
+         * Reset the demodulator after changing the
+         * sample-rate ratio.
          */
+        if (
+            !softReset()
+        ) {
+            return false
+        }
+
         currentSampleRateHz =
-            sampleRateHz
+            realRate
 
         return true
     }
 
-    /**
-     * 获取当前采样率。
-     */
-    fun getSampleRateHz(): Long {
-
-        return currentSampleRateHz
-    }
+    fun getSampleRateHz(): Long =
+        currentSampleRateHz
 
     /**
-     * 设置 IF 频率。
+     * Set RTL2832U IF frequency.
      *
-     * RTL2832U 内部 IF 使用 22-bit
-     * fixed-point 表示。
+     * The IF frequency is represented by a 22-bit
+     * two's-complement value relative to the
+     * 28.8 MHz RTL2832 crystal.
      */
     fun setIfFrequency(
         frequencyHz: Long
@@ -432,65 +498,76 @@ class Rtl2832uDemodulator(
             return false
         }
 
-        val xtal =
-            28_800_000L
-
+        /*
+         * 22-bit phase accumulator.
+         */
         val ifFrequency =
             (
-                frequencyHz.toDouble() /
-                    xtal.toDouble() *
+                frequencyHz *
                     (1L shl 22)
-                ).toLong()
+            ) /
+                RTL_XTAL_HZ
 
-        if (ifFrequency < 0L) {
+        if (
+            ifFrequency < 0L
+        ) {
             return false
         }
 
         val value =
             ifFrequency and
-                0x3FFFFF
+                0x3FFFFFL
 
-     if (
-    !control.writeDemodRegisterByte(
-        PAGE_1,
-        REG_IF_FREQ_0,
-        ((value shr 16) and 0x3F).toInt()
-    )
-) {
-    return false
-}
+        if (
+            !control.writeDemodRegisterByte(
+                PAGE_1,
+                REG_IF_FREQ_0,
+                (
+                    (value shr 16) and
+                        0x3FL
+                    ).toInt()
+            )
+        ) {
+            return false
+        }
 
-if (
-    !control.writeDemodRegisterByte(
-        PAGE_1,
-        REG_IF_FREQ_1,
-        ((value shr 8) and 0xFF).toInt()
-    )
-) {
-    return false
-}
+        if (
+            !control.writeDemodRegisterByte(
+                PAGE_1,
+                REG_IF_FREQ_1,
+                (
+                    (value shr 8) and
+                        0xFFL
+                    ).toInt()
+            )
+        ) {
+            return false
+        }
 
-if (
-    !control.writeDemodRegisterByte(
-        PAGE_1,
-        REG_IF_FREQ_2,
-        (value and 0xFF).toInt()
-    )
-) {
-    return false
-}
+        if (
+            !control.writeDemodRegisterByte(
+                PAGE_1,
+                REG_IF_FREQ_2,
+                (
+                    value and
+                        0xFFL
+                    ).toInt()
+            )
+        ) {
+            return false
+        }
+
         return true
     }
 
     /**
-     * Reset USB endpoint。
-     *
-     * 在开始读取 IQ 之前必须执行。
+     * Reset the USB endpoint/FIFO before starting IQ
+     * acquisition.
      */
     fun resetBuffer(): Boolean {
 
         /*
-         * RTL2832U USB FIFO / endpoint reset。
+         * Stop endpoint.
          */
         if (
             !control.writeRegisterByte(
@@ -502,8 +579,11 @@ if (
             return false
         }
 
+        /*
+         * Re-enable endpoint.
+         */
         if (
-            !control.writeRegisterByte(
+            !control.writeRegister16(
                 USB_BLOCK,
                 REG_USB_EPA_CTL,
                 0x1002
@@ -513,7 +593,7 @@ if (
         }
 
         /*
-         * FIFO configuration。
+         * Clear FIFO configuration.
          */
         if (
             !control.writeRegisterByte(
@@ -528,13 +608,40 @@ if (
         return true
     }
 
-    fun isInitialized(): Boolean {
-        return initialized
+    private fun softReset(): Boolean {
+
+        /*
+         * RTL2832U demodulator soft reset:
+         *
+         * 0x14 = reset
+         * 0x10 = release reset
+         */
+        if (
+            !control.writeDemodRegisterByte(
+                PAGE_1,
+                0x01,
+                0x14
+            )
+        ) {
+            return false
+        }
+
+        if (
+            !control.writeDemodRegisterByte(
+                PAGE_1,
+                0x01,
+                0x10
+            )
+        ) {
+            return false
+        }
+
+        return true
     }
 
-    /**
-     * 重置 Demodulator。
-     */
+    fun isInitialized(): Boolean =
+        initialized
+
     fun reset(): Boolean {
 
         initialized = false
@@ -542,17 +649,6 @@ if (
         currentSampleRateHz =
             DEFAULT_SAMPLE_RATE_HZ
 
-        return (
-            control.writeDemodRegisterByte(
-                1,
-                0x01,
-                0x14
-            ) &&
-            control.writeDemodRegisterByte(
-                1,
-                0x01,
-                0x10
-            )
-        )
+        return softReset()
     }
 }
