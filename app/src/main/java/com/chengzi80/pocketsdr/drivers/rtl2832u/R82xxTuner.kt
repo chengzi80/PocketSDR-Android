@@ -692,25 +692,20 @@ class R82xxTuner(
         /*
          * R820T uses a 28.8 MHz crystal.
          */
-        var pllReferenceHz =
+        /*
+         * R820T/R820T2 uses the full 28.8 MHz
+         * crystal value for the PLL calculation.
+         *
+         * R10 bit 4 (REFDIV2) is kept disabled
+         * for the normal 28.8 MHz R820T/R820T2.
+         * Do not divide pllReferenceHz here:
+         * doing so would make NINT invalid for
+         * normal frequencies such as 100 MHz.
+         */
+        val pllReferenceHz =
             xtalFrequencyHz
 
-        /*
-         * The current PocketSDR target is the
-         * common 28.8 MHz R820T/R820T2.
-         */
-        var refDiv2 = 0
-
-        if (
-            xtalFrequencyHz >
-            24_000_000L
-        ) {
-            pllReferenceHz /=
-                2L
-
-            refDiv2 =
-                0x10
-        }
+        val refDiv2 = 0
 
         if (
             !writeRegisterMasked(
