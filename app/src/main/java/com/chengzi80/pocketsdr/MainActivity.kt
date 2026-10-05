@@ -22,6 +22,8 @@ class MainActivity : AppCompatActivity() {
 
     private var rtlDriver: Rtl2832uDriver? = null
 
+    private var iqStartTimeMs = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         createUi()
@@ -167,8 +169,60 @@ class MainActivity : AppCompatActivity() {
                         "Tuner：$tunerType\n" +
                         "I²C 地址：$tunerAddress\n" +
                         "PLL：$pllLock\n" +
-                        "采样率：${driver.getSampleRateHz()} Hz\n" +
-                        "中心频率：${driver.getFrequencyHz()} Hz"
+                        "采样率：\${driver.getSampleRateHz()} Hz\n" +
+                        "中心频率：\${driver.getFrequencyHz()} Hz\n\n" +
+                        "IQ 数据：正在启动..."
+                }
+
+                iqStartTimeMs = System.currentTimeMillis()
+
+                val started =
+                    driver.startSampleReading(
+                        onSamples = { _, _ ->
+                            val elapsedMs =
+                                (System.currentTimeMillis() - iqStartTimeMs)
+                                    .coerceAtLeast(1L)
+
+                            val bytes =
+                                driver.getTotalSampleBytes()
+
+                            val bytesPerSecond =
+                                bytes * 1000L / elapsedMs
+
+                            runOnUiThread {
+                                statusText.text = "RTL2832U + R82xx 初始化成功"
+                                detailText.text =
+                                    "USB 控制传输：正常\n" +
+                                    "Demodulator：正常\n" +
+                                    "Tuner：$tunerType\n" +
+                                    "I²C 地址：$tunerAddress\n" +
+                                    "PLL：$pllLock\n" +
+                                    "采样率：\${driver.getSampleRateHz()} Hz\n" +
+                                    "中心频率：\${driver.getFrequencyHz()} Hz\n\n" +
+                                    "IQ 数据：正在接收\n" +
+                                    "已接收：\${bytes} bytes\n" +
+                                    "USB 吞吐：\${bytesPerSecond / 1024} KB/s"
+                            }
+                        },
+                        onError = { error ->
+                            runOnUiThread {
+                                statusText.text = "IQ 数据读取失败"
+                                detailText.text = error
+                            }
+                        }
+                    )
+
+                if (!started) {
+                    val error =
+                        driver.getLastError()
+                            ?: "无法启动 USB IQ 读取"
+
+                    runOnUiThread {
+                        statusText.text = "IQ 数据读取启动失败"
+                        detailText.text = error
+                    }
+
+                    return@thread
                 }
 
             } catch (e: Exception) {
