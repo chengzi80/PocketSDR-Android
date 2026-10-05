@@ -1,6 +1,8 @@
 package com.chengzi80.pocketsdr.drivers.rtl2832u
 
 import android.hardware.usb.UsbDeviceConnection
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class Rtl2832uSampleReader(
     private val connection: UsbDeviceConnection,
@@ -10,17 +12,19 @@ class Rtl2832uSampleReader(
     companion object {
 
         private const val DEFAULT_BUFFER_SIZE =
-            16 * 16384
+            Rtl2832uSampleConfig.DEFAULT_BUFFER_SIZE
 
         private const val DEFAULT_TIMEOUT =
-            1000
+            Rtl2832uSampleConfig.DEFAULT_USB_TIMEOUT_MS
     }
 
-    private var running =
-        false
+    private val running =
+        AtomicBoolean(false)
 
-    private var workerThread:
-            Thread? = null
+    private val totalBytes =
+        AtomicLong(0L)
+
+    private var workerThread: Thread? = null
 
     fun start(
         bufferSize: Int = DEFAULT_BUFFER_SIZE,
@@ -29,23 +33,21 @@ class Rtl2832uSampleReader(
         onError: (String) -> Unit
     ): Boolean {
 
-        if (running) {
+        if (!running.compareAndSet(false, true)) {
             return false
         }
 
-        running = true
+        totalBytes.set(0L)
 
         workerThread =
             Thread {
 
                 val buffer =
-                    ByteArray(
-                        bufferSize
-                    )
+                    ByteArray(bufferSize)
 
                 try {
 
-                    while (running) {
+                    while (running.get()) {
 
                         val count =
                             connection.bulkTransfer(
@@ -55,52 +57,93 @@ class Rtl2832uSampleReader(
                                 timeout
                             )
 
-                        if (!running) {
+                        if (!running.get()) {
                             break
                         }
 
                         if (count > 0) {
 
+                            totalBytes.addAndGet(
+                                count.toLong()
+                            )
+
+                            /*
+                             * bulkTransfer() 返回的数据
+                             * 就是 RTL2832U 输出的原始
+                             * unsigned 8-bit IQ 数据。
+                             */
                             val samples =
-                                buffer.copyOf(
+                                buffer.copyOf(count)
+
+                            try {
+
+                                onSamples(
+                                    samples,
                                     count
                                 )
 
-                            onSamples(
-                                samples,
-                                count
-                            )
+                            } catch (e: Exception) {
 
-                        } else if (
-                            count < 0
-                        ) {
+                                onError(
+                                    "IQ数据回调异常：${e.message}"
+                                )
+
+                                break
+                            }
+
+                        } else if (count == 0) {
+
+                            /*
+                             * USB timeout。
+                             *
+                             * timeout 并不一定意味着设备
+                             * 出错，所以继续读取。
+                             */
+                            continue
+
+                        } else {
 
                             onError(
-                                "USB Bulk 读取失败：$count"
+                                "USB Bulk读取失败：$count"
                             )
 
                             break
                         }
                     }
 
-                } catch (e: Exception) {
+                } catch (e: InterruptedException) {
 
-                    if (running) {
+                    /*
+                     * stop() 主动中断线程时属于正常退出。
+                     */
+                    if (running.get()) {
 
                         onError(
-                            "读取 SDR 数据失败：${e.message}"
+                            "IQ读取线程被中断：${e.message}"
+                        )
+                    }
+
+                } catch (e: Exception) {
+
+                    if (running.get()) {
+
+                        onError(
+                            "读取SDR数据失败：${e.message}"
                         )
                     }
 
                 } finally {
 
-                    running = false
+                    running.set(false)
                 }
 
             }.apply {
 
                 name =
-                    "PocketSDR-RTL2832U-Reader"
+                    "PocketSDR-RTL2832U-IQ-Reader"
+
+                priority =
+                    Thread.NORM_PRIORITY
 
                 start()
             }
@@ -110,7 +153,13 @@ class Rtl2832uSampleReader(
 
     fun stop() {
 
-        running = false
+        if (!running.compareAndSet(
+                true,
+                false
+            )
+        ) {
+            return
+        }
 
         try {
 
@@ -123,7 +172,14 @@ class Rtl2832uSampleReader(
     }
 
     fun isRunning(): Boolean {
+        return running.get()
+    }
 
-        return running
+    fun getTotalBytes(): Long {
+        return totalBytes.get()
+    }
+
+    fun resetStatistics() {
+        totalBytes.set(0L)
     }
 }
