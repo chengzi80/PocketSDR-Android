@@ -3,6 +3,7 @@ package com.chengzi80.pocketsdr
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.view.Gravity
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -19,6 +20,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var deviceText: TextView
     private lateinit var detailText: TextView
+    private lateinit var startReceiveButton: Button
 
     private var rtlDriver: Rtl2832uDriver? = null
 
@@ -169,60 +171,13 @@ class MainActivity : AppCompatActivity() {
                         "Tuner：$tunerType\n" +
                         "I²C 地址：$tunerAddress\n" +
                         "PLL：$pllLock\n" +
-                        "采样率：\${driver.getSampleRateHz()} Hz\n" +
-                        "中心频率：\${driver.getFrequencyHz()} Hz\n\n" +
-                        "IQ 数据：正在启动..."
-                }
-
-                iqStartTimeMs = System.currentTimeMillis()
-
-                val started =
-                    driver.startSampleReading(
-                        onSamples = { _, _ ->
-                            val elapsedMs =
-                                (System.currentTimeMillis() - iqStartTimeMs)
-                                    .coerceAtLeast(1L)
-
-                            val bytes =
-                                driver.getTotalSampleBytes()
-
-                            val bytesPerSecond =
-                                bytes * 1000L / elapsedMs
-
-                            runOnUiThread {
-                                statusText.text = "RTL2832U + R82xx 初始化成功"
-                                detailText.text =
-                                    "USB 控制传输：正常\n" +
-                                    "Demodulator：正常\n" +
-                                    "Tuner：$tunerType\n" +
-                                    "I²C 地址：$tunerAddress\n" +
-                                    "PLL：$pllLock\n" +
-                                    "采样率：\${driver.getSampleRateHz()} Hz\n" +
-                                    "中心频率：\${driver.getFrequencyHz()} Hz\n\n" +
-                                    "IQ 数据：正在接收\n" +
-                                    "已接收：\${bytes} bytes\n" +
-                                    "USB 吞吐：\${bytesPerSecond / 1024} KB/s"
-                            }
-                        },
-                        onError = { error ->
-                            runOnUiThread {
-                                statusText.text = "IQ 数据读取失败"
-                                detailText.text = error
-                            }
-                        }
+                        "采样率：" + driver.getSampleRateHz() + " Hz\n" +
+                        "中心频率：" + driver.getFrequencyHz() + " Hz\n\n" +
+                        "设备检测完成，请点击“开始接收”"
+                    startReceiveButton.isEnabled = true
+                    startReceiveButton.tag = ReceptionInfo(
+                        driver, tunerType, tunerAddress, pllLock
                     )
-
-                if (!started) {
-                    val error =
-                        driver.getLastError()
-                            ?: "无法启动 USB IQ 读取"
-
-                    runOnUiThread {
-                        statusText.text = "IQ 数据读取启动失败"
-                        detailText.text = error
-                    }
-
-                    return@thread
                 }
 
             } catch (e: Exception) {
@@ -238,6 +193,56 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private data class ReceptionInfo(
+        val driver: Rtl2832uDriver,
+        val tunerType: String,
+        val tunerAddress: String,
+        val pllLock: String
+    )
+
+    private fun startIqReception(info: ReceptionInfo) {
+        val driver = info.driver
+        iqStartTimeMs = System.currentTimeMillis()
+        startReceiveButton.isEnabled = false
+        startReceiveButton.text = "正在接收..."
+
+        val started = driver.startSampleReading(
+            onSamples = { _, _ ->
+                val elapsedMs =
+                    (System.currentTimeMillis() - iqStartTimeMs).coerceAtLeast(1L)
+                val bytes = driver.getTotalSampleBytes()
+                val bytesPerSecond = bytes * 1000L / elapsedMs
+
+                runOnUiThread {
+                    statusText.text = "RTL2832U + R82xx 接收中"
+                    detailText.text =
+                        "USB 控制传输：正常\n" +
+                        "Demodulator：正常\n" +
+                        "Tuner：${info.tunerType}\n" +
+                        "I²C 地址：${info.tunerAddress}\n" +
+                        "PLL：${info.pllLock}\n" +
+                        "采样率：" + driver.getSampleRateHz() + " Hz\n" +
+                        "中心频率：" + driver.getFrequencyHz() + " Hz\n\n" +
+                        "IQ 数据：正在接收\n" +
+                        "已接收：${bytes} bytes\n" +
+                        "USB 吞吐：${bytesPerSecond / 1024} KB/s"
+                }
+            },
+            onError = { error ->
+                runOnUiThread {
+                    startReceiveButton.isEnabled = true
+                    startReceiveButton.text = "开始接收"
+                    statusText.text = "IQ 数据读取失败"
+                    detailText.text = error
+                }
+            }
+        )
+
+        if (!started) {
+            startReceiveButton.isEnabled = true
+            startReceiveButton.text = "开始接收"
+        }
+    }
     private fun closeRtlDriver() {
         val driver = rtlDriver
         rtlDriver = null
@@ -294,7 +299,19 @@ class MainActivity : AppCompatActivity() {
         root.addView(subtitleText)
         root.addView(statusText)
         root.addView(deviceText)
+        startReceiveButton = Button(this).apply {
+            text = "开始接收"
+            isEnabled = false
+            setOnClickListener {
+                val info = tag as? ReceptionInfo
+                if (info != null) {
+                    startIqReception(info)
+                }
+            }
+        }
+
         root.addView(detailText)
+        root.addView(startReceiveButton)
         setContentView(root)
     }
 
