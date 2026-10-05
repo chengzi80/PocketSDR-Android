@@ -8,6 +8,8 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 
 class SdrDeviceManager(
@@ -16,65 +18,114 @@ class SdrDeviceManager(
 
     companion object {
 
+        /*
+         * USB 权限广播
+         */
         private const val ACTION_USB_PERMISSION =
             "com.chengzi80.pocketsdr.USB_PERMISSION"
 
-        // RTL-SDR / RTL2832U
+        /*
+         * RTL2832U 兼容 USB SDR
+         *
+         * 注意：
+         * 0x0BDA:0x2838 表示 RTL2832U 类 USB 设备，
+         * 不能仅凭这个 VID/PID 判断具体品牌。
+         */
         private const val RTL2832U_VID = 0x0BDA
         private const val RTL2832U_PID = 0x2838
 
-        private const val REALTEK_VID = 0x0BDA
-
-        // HackRF One
+        /*
+         * HackRF One
+         */
         private const val HACKRF_VID = 0x1D50
         private const val HACKRF_PID = 0x6089
 
-        // Airspy
+        /*
+         * Airspy
+         */
         private const val AIRSPY_VID = 0x1D50
         private const val AIRSPY_PID = 0x60A1
 
-        // LimeSDR
+        /*
+         * LimeSDR
+         */
         private const val LIMESDR_VID = 0x0403
         private const val LIMESDR_PID = 0x601F
 
-        // PlutoSDR
+        /*
+         * PlutoSDR
+         */
         private const val PLUTOSDR_VID = 0x0456
         private const val PLUTOSDR_PID = 0xB673
 
-        // SDRplay
+        /*
+         * SDRplay
+         */
         private const val SDRPLAY_VID = 0x1DF7
     }
 
     private val usbManager =
-        context.getSystemService(Context.USB_SERVICE) as UsbManager
+        context.getSystemService(
+            Context.USB_SERVICE
+        ) as UsbManager
 
+    /*
+     * 当前 SDR 设备
+     */
     var currentDevice: SdrDevice? = null
         private set
 
+    /*
+     * 当前设备状态
+     */
     var state: SdrDeviceState =
         SdrDeviceState.DISCONNECTED
         private set
 
+    /*
+     * 设备插入
+     */
     var onDeviceAttached:
             ((SdrDevice) -> Unit)? = null
 
+    /*
+     * 设备拔出
+     */
     var onDeviceDetached:
             ((SdrDevice?) -> Unit)? = null
 
+    /*
+     * 需要 USB 权限
+     */
     var onPermissionRequired:
             ((SdrDevice) -> Unit)? = null
 
+    /*
+     * 设备已经连接
+     */
     var onDeviceConnected:
             ((SdrDevice) -> Unit)? = null
 
+    /*
+     * 设备已经断开
+     */
     var onDeviceDisconnected:
             (() -> Unit)? = null
 
+    /*
+     * 错误
+     */
     var onDeviceError:
             ((String) -> Unit)? = null
 
+    /*
+     * Receiver 是否已经注册
+     */
     private var receiverRegistered = false
 
+    /*
+     * USB 广播接收器
+     */
     private val usbReceiver =
         object : BroadcastReceiver() {
 
@@ -85,6 +136,9 @@ class SdrDeviceManager(
 
                 when (intent.action) {
 
+                    /*
+                     * USB 设备插入
+                     */
                     UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
 
                         val device =
@@ -98,6 +152,9 @@ class SdrDeviceManager(
                         }
                     }
 
+                    /*
+                     * USB 设备拔出
+                     */
                     UsbManager.ACTION_USB_DEVICE_DETACHED -> {
 
                         val device =
@@ -111,6 +168,9 @@ class SdrDeviceManager(
                         }
                     }
 
+                    /*
+                     * USB 权限结果
+                     */
                     ACTION_USB_PERMISSION -> {
 
                         handlePermissionResult(
@@ -121,6 +181,9 @@ class SdrDeviceManager(
             }
         }
 
+    /**
+     * 启动设备管理器
+     */
     fun start() {
 
         if (!receiverRegistered) {
@@ -142,8 +205,8 @@ class SdrDeviceManager(
                 }
 
             /*
-             * 使用 EXPORTED，让系统 USB 广播和
-             * USB 权限 PendingIntent 都能够正常到达。
+             * USB 插入/拔出属于系统广播，
+             * 因此使用 RECEIVER_EXPORTED。
              */
             ContextCompat.registerReceiver(
                 context,
@@ -155,9 +218,18 @@ class SdrDeviceManager(
             receiverRegistered = true
         }
 
+        /*
+         * APP 启动时主动扫描一次。
+         *
+         * 如果 SDR 在打开 APP 之前就已经插入，
+         * 也能够被发现。
+         */
         scanDevices()
     }
 
+    /**
+     * 停止设备管理器
+     */
     fun stop() {
 
         if (receiverRegistered) {
@@ -169,6 +241,7 @@ class SdrDeviceManager(
                 )
 
             } catch (_: Exception) {
+                // Receiver 已经注销时忽略
             }
 
             receiverRegistered = false
@@ -176,7 +249,7 @@ class SdrDeviceManager(
     }
 
     /**
-     * 扫描当前所有 USB 设备
+     * 扫描当前 USB 设备
      */
     fun scanDevices() {
 
@@ -189,6 +262,9 @@ class SdrDeviceManager(
         var detectedSdr:
                 SdrDevice? = null
 
+        /*
+         * 遍历所有 USB 设备
+         */
         for (device in devices) {
 
             val sdr =
@@ -197,10 +273,14 @@ class SdrDeviceManager(
             if (sdr.supported) {
 
                 detectedSdr = sdr
+
                 break
             }
         }
 
+        /*
+         * 没有找到支持的 SDR
+         */
         if (detectedSdr == null) {
 
             currentDevice = null
@@ -211,6 +291,9 @@ class SdrDeviceManager(
             return
         }
 
+        /*
+         * 找到 SDR
+         */
         handleKnownDevice(
             detectedSdr
         )
@@ -224,18 +307,31 @@ class SdrDeviceManager(
     ) {
 
         val sdr =
-            identifyDevice(usbDevice)
+            identifyDevice(
+                usbDevice
+            )
 
+        /*
+         * 不是我们支持的 SDR
+         */
         if (!sdr.supported) {
             return
         }
 
-        currentDevice = sdr
+        currentDevice =
+            sdr
 
+        /*
+         * 通知 UI：
+         * 检测到 SDR
+         */
         onDeviceAttached?.invoke(
             sdr
         )
 
+        /*
+         * 继续处理权限
+         */
         handleKnownDevice(
             sdr
         )
@@ -251,17 +347,26 @@ class SdrDeviceManager(
         val current =
             currentDevice
 
+        /*
+         * 判断拔出的是否是当前 SDR
+         */
         if (
             current != null &&
             current.usbDevice.deviceId ==
             usbDevice.deviceId
         ) {
 
+            /*
+             * 清除当前设备
+             */
             currentDevice = null
 
             state =
                 SdrDeviceState.DISCONNECTED
 
+            /*
+             * 通知 UI
+             */
             onDeviceDetached?.invoke(
                 current
             )
@@ -277,10 +382,11 @@ class SdrDeviceManager(
         sdr: SdrDevice
     ) {
 
-        currentDevice = sdr
+        currentDevice =
+            sdr
 
         /*
-         * 已经获得 USB 权限
+         * 已经拥有 USB 权限
          */
         if (
             usbManager.hasPermission(
@@ -299,7 +405,7 @@ class SdrDeviceManager(
         }
 
         /*
-         * 尚未获得 USB 权限
+         * 没有 USB 权限
          */
         state =
             SdrDeviceState.PERMISSION_REQUIRED
@@ -308,6 +414,9 @@ class SdrDeviceManager(
             sdr
         )
 
+        /*
+         * 请求权限
+         */
         requestPermission(
             sdr.usbDevice
         )
@@ -325,10 +434,17 @@ class SdrDeviceManager(
                 ACTION_USB_PERMISSION
             ).apply {
 
+                /*
+                 * 限制为本 APP
+                 */
                 setPackage(
                     context.packageName
                 )
 
+                /*
+                 * 保存设备 ID，
+                 * 方便异常情况下重新扫描。
+                 */
                 putExtra(
                     "device_id",
                     device.deviceId
@@ -351,7 +467,7 @@ class SdrDeviceManager(
     }
 
     /**
-     * USB 权限回调
+     * USB 权限结果
      */
     private fun handlePermissionResult(
         intent: Intent
@@ -361,8 +477,8 @@ class SdrDeviceManager(
             getUsbDevice(intent)
 
         /*
-         * 没有拿到设备对象时，
-         * 稍后重新扫描。
+         * 如果系统没有把设备对象带回来，
+         * 延迟重新扫描。
          */
         if (device == null) {
 
@@ -381,8 +497,17 @@ class SdrDeviceManager(
             )
 
         /*
-         * 不直接相信回调结果，
-         * 再向 UsbManager 确认一次。
+         * 再主动向 UsbManager 确认一次。
+         *
+         * 这样可以避免某些手机上：
+         *
+         * 点击允许
+         * ↓
+         * 回调已经到达
+         * ↓
+         * hasPermission() 暂时还是 false
+         *
+         * 导致界面一直卡在“等待 USB 权限”。
          */
         val hasPermission =
             usbManager.hasPermission(
@@ -394,58 +519,94 @@ class SdrDeviceManager(
             hasPermission
         ) {
 
-            val sdr =
-                identifyDevice(device)
-
-            currentDevice =
-                sdr
-
-            state =
-                SdrDeviceState.CONNECTED
-
-            onDeviceConnected?.invoke(
-                sdr
+            connectAfterPermission(
+                device
             )
 
-        } else {
-
-            /*
-             * 某些 Android / 手机厂商上，
-             * 权限结果广播到达时 hasPermission
-             * 可能还没有立即更新。
-             *
-             * 延迟一点再检查一次。
-             */
-            state =
-                SdrDeviceState.PERMISSION_REQUIRED
-
-            android.os.Handler(
-                android.os.Looper.getMainLooper()
-            ).postDelayed({
-
-                checkPermissionAgain(
-                    device
-                )
-
-            }, 300)
+            return
         }
+
+        /*
+         * 某些手机权限状态更新可能存在
+         * 极短的延迟。
+         *
+         * 300ms 后再检查一次。
+         */
+        state =
+            SdrDeviceState.PERMISSION_REQUIRED
+
+        Handler(
+            Looper.getMainLooper()
+        ).postDelayed({
+
+            checkPermissionAgain(
+                device
+            )
+
+        }, 300)
     }
 
     /**
-     * 再次确认 USB 权限
+     * 获得权限后连接
+     */
+    private fun connectAfterPermission(
+        device: UsbDevice
+    ) {
+
+        val sdr =
+            identifyDevice(
+                device
+            )
+
+        /*
+         * 再确认一次是否还是支持的 SDR
+         */
+        if (!sdr.supported) {
+
+            state =
+                SdrDeviceState.ERROR
+
+            onDeviceError?.invoke(
+                "无法识别该 SDR 设备"
+            )
+
+            return
+        }
+
+        currentDevice =
+            sdr
+
+        state =
+            SdrDeviceState.CONNECTED
+
+        /*
+         * 通知 MainActivity
+         */
+        onDeviceConnected?.invoke(
+            sdr
+        )
+    }
+
+    /**
+     * 延迟再次检查 USB 权限
      */
     private fun checkPermissionAgain(
         device: UsbDevice
     ) {
 
         /*
-         * 设备已经被拔出
+         * 先确认设备还在不在
          */
         val stillExists =
             usbManager.deviceList.values.any {
-                it.deviceId == device.deviceId
+
+                it.deviceId ==
+                        device.deviceId
             }
 
+        /*
+         * 设备已经被拔出
+         */
         if (!stillExists) {
 
             currentDevice = null
@@ -459,7 +620,7 @@ class SdrDeviceManager(
         }
 
         /*
-         * 权限已经成功获得
+         * USB 权限已经获得
          */
         if (
             usbManager.hasPermission(
@@ -467,24 +628,15 @@ class SdrDeviceManager(
             )
         ) {
 
-            val sdr =
-                identifyDevice(device)
-
-            currentDevice =
-                sdr
-
-            state =
-                SdrDeviceState.CONNECTED
-
-            onDeviceConnected?.invoke(
-                sdr
+            connectAfterPermission(
+                device
             )
 
             return
         }
 
         /*
-         * 确实没有权限
+         * 权限确实没有获得
          */
         state =
             SdrDeviceState.ERROR
@@ -495,12 +647,13 @@ class SdrDeviceManager(
     }
 
     /**
-     * 权限广播异常情况下重新扫描
+     * 权限回调没有设备对象时，
+     * 延迟重新扫描。
      */
     private fun rescanAfterPermission() {
 
-        android.os.Handler(
-            android.os.Looper.getMainLooper()
+        Handler(
+            Looper.getMainLooper()
         ).postDelayed({
 
             scanDevices()
@@ -509,7 +662,7 @@ class SdrDeviceManager(
     }
 
     /**
-     * 识别 SDR
+     * 识别 USB SDR
      */
     private fun identifyDevice(
         device: UsbDevice
@@ -536,25 +689,43 @@ class SdrDeviceManager(
         when {
 
             /*
-             * RTL-SDR
+             * ========================================
+             * RTL2832U 兼容 SDR
+             * ========================================
+             *
+             * 注意：
+             *
+             * 这里不是把它称为“RTL-SDR”。
+             *
+             * 它可能是：
+             *
+             * 国产 DVB-T 电视棒
+             * RTL2832U + R820T
+             * RTL2832U + R820T2
+             * RTL2832U + R860
+             * 其他兼容方案
+             *
+             * 这里只确认 RTL2832U USB 接口。
              */
             vid == RTL2832U_VID &&
                     pid == RTL2832U_PID -> {
 
                 name =
-                    "RTL-SDR / RTL2832U"
+                    "RTL2832U 兼容 SDR"
 
                 manufacturer =
                     "Realtek"
 
                 description =
-                    "RTL2832U USB SDR"
+                    "RTL2832U USB 软件无线电设备"
 
                 supported = true
             }
 
             /*
+             * ========================================
              * HackRF One
+             * ========================================
              */
             vid == HACKRF_VID &&
                     pid == HACKRF_PID -> {
@@ -572,7 +743,9 @@ class SdrDeviceManager(
             }
 
             /*
+             * ========================================
              * Airspy
+             * ========================================
              */
             vid == AIRSPY_VID &&
                     pid == AIRSPY_PID -> {
@@ -590,7 +763,9 @@ class SdrDeviceManager(
             }
 
             /*
+             * ========================================
              * LimeSDR
+             * ========================================
              */
             vid == LIMESDR_VID &&
                     pid == LIMESDR_PID -> {
@@ -608,7 +783,9 @@ class SdrDeviceManager(
             }
 
             /*
+             * ========================================
              * PlutoSDR
+             * ========================================
              */
             vid == PLUTOSDR_VID &&
                     pid == PLUTOSDR_PID -> {
@@ -626,7 +803,9 @@ class SdrDeviceManager(
             }
 
             /*
+             * ========================================
              * SDRplay
+             * ========================================
              */
             vid == SDRPLAY_VID -> {
 
@@ -638,23 +817,6 @@ class SdrDeviceManager(
 
                 description =
                     "SDRplay Software Defined Radio"
-
-                supported = true
-            }
-
-            /*
-             * 其他 Realtek USB SDR
-             */
-            vid == REALTEK_VID -> {
-
-                name =
-                    "Realtek USB SDR"
-
-                manufacturer =
-                    "Realtek"
-
-                description =
-                    "可能是 RTL-SDR 兼容设备"
 
                 supported = true
             }
@@ -671,6 +833,9 @@ class SdrDeviceManager(
         )
     }
 
+    /**
+     * Android 13+ / Android 12- 兼容获取 UsbDevice
+     */
     @Suppress("DEPRECATION")
     private fun getUsbDevice(
         intent: Intent
