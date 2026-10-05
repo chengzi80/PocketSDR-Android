@@ -8,46 +8,106 @@ class Rtl2832uUsbControl(
 
     companion object {
 
-        private const val USB_TIMEOUT = 1000
+        private const val CTRL_IN =
+            0xC0
 
-        // RTL2832U USB requests
-        const val REQUEST_REG_BYTE =
-            0x01
-
-        const val REQUEST_REGS =
-            0x02
-
-        const val REQUEST_I2C =
-            0x03
-
-        const val REQUEST_I2C_DUMP =
-            0x04
-
-        const val REQUEST_IR =
-            0x05
-
-        const val REQUEST_EEPROM =
-            0x06
-
-        const val REQUEST_DEMOD =
-            0x00
-
-        const val REQUEST_I2C_WRITE =
-            0x03
-
-        const val REQUEST_I2C_READ =
-            0x04
-
-        const val USB_DIR_OUT =
+        private const val CTRL_OUT =
             0x40
 
-        const val USB_DIR_IN =
-            0xC0
+        private const val CTRL_TIMEOUT =
+            300
+
+        /*
+         * RTL2832U register blocks
+         */
+        const val BLOCK_DEMOD =
+            0
+
+        const val BLOCK_USB =
+            1
+
+        const val BLOCK_SYS =
+            2
+
+        const val BLOCK_TUNER =
+            3
+
+        const val BLOCK_ROM =
+            4
+
+        const val BLOCK_IR =
+            5
+
+        const val BLOCK_IIC =
+            6
+
+        /*
+         * RTL2832U system registers
+         */
+        const val REG_USB_SYSCTL =
+            0x2000
+
+        const val REG_USB_CTRL =
+            0x2010
+
+        const val REG_USB_STAT =
+            0x2014
+
+        const val REG_USB_EPA_CFG =
+            0x2144
+
+        const val REG_USB_EPA_CTL =
+            0x2148
+
+        const val REG_USB_EPA_MAXPKT =
+            0x2158
+
+        const val REG_USB_EPA_MAXPKT_2 =
+            0x215A
+
+        const val REG_USB_EPA_FIFO_CFG =
+            0x2160
+
+        const val REG_DEMOD_CTL =
+            0x3000
+
+        const val REG_GPO =
+            0x3001
+
+        const val REG_GPI =
+            0x3002
+
+        const val REG_GPOE =
+            0x3003
+
+        const val REG_GPD =
+            0x3004
+
+        const val REG_SYSINTE =
+            0x3005
+
+        const val REG_SYSINTS =
+            0x3006
+
+        const val REG_GP_CFG0 =
+            0x3007
+
+        const val REG_GP_CFG1 =
+            0x3008
+
+        const val REG_SYSINTE_1 =
+            0x3009
+
+        const val REG_SYSINTS_1 =
+            0x300A
+
+        const val REG_DEMOD_CTL_1 =
+            0x300B
     }
 
-    fun readReg(
+    fun readRegister(
         block: Int,
-        addr: Int,
+        address: Int,
         length: Int
     ): ByteArray? {
 
@@ -59,30 +119,29 @@ class Rtl2832uUsbControl(
             ByteArray(length)
 
         val index =
-            ((block and 0xFF) shl 8) or
-                    (addr and 0xFF)
+            (block and 0xFF) shl 8
 
         val result =
             connection.controlTransfer(
-                USB_DIR_IN,
-                REQUEST_REGS,
+                CTRL_IN,
                 0,
+                address and 0xFFFF,
                 index,
                 buffer,
                 length,
-                USB_TIMEOUT
+                CTRL_TIMEOUT
             )
 
-        if (result < 0) {
+        if (result != length) {
             return null
         }
 
-        return buffer.copyOf(result)
+        return buffer
     }
 
-    fun writeReg(
+    fun writeRegister(
         block: Int,
-        addr: Int,
+        address: Int,
         data: ByteArray
     ): Boolean {
 
@@ -91,61 +150,99 @@ class Rtl2832uUsbControl(
         }
 
         val index =
-            ((block and 0xFF) shl 8) or
-                    (addr and 0xFF)
+            ((block and 0xFF) shl 8) or 0x10
 
         val result =
             connection.controlTransfer(
-                USB_DIR_OUT,
-                REQUEST_REGS,
+                CTRL_OUT,
                 0,
+                address and 0xFFFF,
                 index,
                 data,
                 data.size,
-                USB_TIMEOUT
+                CTRL_TIMEOUT
             )
 
         return result == data.size
     }
 
-    fun readRegByte(
+    fun readRegisterByte(
         block: Int,
-        addr: Int
+        address: Int
     ): Int? {
 
-        val result =
-            readReg(
+        val data =
+            readRegister(
                 block,
-                addr,
+                address,
                 1
             )
+                ?: return null
 
-        if (
-            result == null ||
-            result.isEmpty()
-        ) {
-            return null
-        }
-
-        return result[0].toInt() and 0xFF
+        return data[0].toInt() and 0xFF
     }
 
-    fun writeRegByte(
+    fun writeRegisterByte(
         block: Int,
-        addr: Int,
+        address: Int,
         value: Int
     ): Boolean {
 
-        return writeReg(
+        return writeRegister(
             block,
-            addr,
+            address,
             byteArrayOf(
                 (value and 0xFF).toByte()
             )
         )
     }
 
-    fun readI2c(
+    fun readRegister16(
+        block: Int,
+        address: Int
+    ): Int? {
+
+        val data =
+            readRegister(
+                block,
+                address,
+                2
+            )
+                ?: return null
+
+        return (
+            (data[1].toInt() and 0xFF) shl 8
+        ) or
+                (data[0].toInt() and 0xFF)
+    }
+
+    fun writeRegister16(
+        block: Int,
+        address: Int,
+        value: Int
+    ): Boolean {
+
+        return writeRegister(
+            block,
+            address,
+            byteArrayOf(
+                ((value shr 8) and 0xFF).toByte(),
+                (value and 0xFF).toByte()
+            )
+        )
+    }
+
+    /*
+     * RTL2832U demodulator register access.
+     *
+     * rtl-sdr uses:
+     *
+     * wValue = (address << 8) | 0x20
+     * wIndex = page
+     */
+
+    fun readDemodRegister(
+        page: Int,
         address: Int,
         length: Int
     ): ByteArray? {
@@ -157,25 +254,32 @@ class Rtl2832uUsbControl(
         val buffer =
             ByteArray(length)
 
+        val value =
+            ((address and 0xFF) shl 8) or 0x20
+
+        val index =
+            page and 0xFF
+
         val result =
             connection.controlTransfer(
-                USB_DIR_IN,
-                REQUEST_I2C_READ,
+                CTRL_IN,
                 0,
-                address and 0xFF,
+                value,
+                index,
                 buffer,
                 length,
-                USB_TIMEOUT
+                CTRL_TIMEOUT
             )
 
-        if (result < 0) {
+        if (result != length) {
             return null
         }
 
-        return buffer.copyOf(result)
+        return buffer
     }
 
-    fun writeI2c(
+    fun writeDemodRegister(
+        page: Int,
         address: Int,
         data: ByteArray
     ): Boolean {
@@ -184,17 +288,151 @@ class Rtl2832uUsbControl(
             return false
         }
 
+        val value =
+            ((address and 0xFF) shl 8) or 0x20
+
+        val index =
+            (page and 0xFF) or 0x10
+
         val result =
             connection.controlTransfer(
-                USB_DIR_OUT,
-                REQUEST_I2C_WRITE,
+                CTRL_OUT,
                 0,
-                address and 0xFF,
+                value,
+                index,
                 data,
                 data.size,
-                USB_TIMEOUT
+                CTRL_TIMEOUT
             )
 
         return result == data.size
+    }
+
+    fun readDemodRegisterByte(
+        page: Int,
+        address: Int
+    ): Int? {
+
+        val data =
+            readDemodRegister(
+                page,
+                address,
+                1
+            )
+                ?: return null
+
+        return data[0].toInt() and 0xFF
+    }
+
+    fun writeDemodRegisterByte(
+        page: Int,
+        address: Int,
+        value: Int
+    ): Boolean {
+
+        return writeDemodRegister(
+            page,
+            address,
+            byteArrayOf(
+                (value and 0xFF).toByte()
+            )
+        )
+    }
+
+    /*
+     * RTL2832U I²C bridge.
+     *
+     * The tuner is accessed through BLOCK_IIC.
+     */
+
+    fun i2cWrite(
+        address: Int,
+        data: ByteArray
+    ): Boolean {
+
+        if (data.isEmpty()) {
+            return false
+        }
+
+        return writeRegister(
+            BLOCK_IIC,
+            address,
+            data
+        )
+    }
+
+    fun i2cRead(
+        address: Int,
+        length: Int
+    ): ByteArray? {
+
+        return readRegister(
+            BLOCK_IIC,
+            address,
+            length
+        )
+    }
+
+    fun i2cWriteRegister(
+        address: Int,
+        register: Int,
+        value: Int
+    ): Boolean {
+
+        return i2cWrite(
+            address,
+            byteArrayOf(
+                (register and 0xFF).toByte(),
+                (value and 0xFF).toByte()
+            )
+        )
+    }
+
+    fun i2cReadRegister(
+        address: Int,
+        register: Int
+    ): Int? {
+
+        val registerByte =
+            byteArrayOf(
+                (register and 0xFF).toByte()
+            )
+
+        if (
+            !i2cWrite(
+                address,
+                registerByte
+            )
+        ) {
+            return null
+        }
+
+        val data =
+            i2cRead(
+                address,
+                1
+            )
+                ?: return null
+
+        if (data.isEmpty()) {
+            return null
+        }
+
+        return data[0].toInt() and 0xFF
+    }
+
+    fun setI2cRepeater(
+        enabled: Boolean
+    ): Boolean {
+
+        return writeDemodRegisterByte(
+            page = 1,
+            address = 0x01,
+            value = if (enabled) {
+                0x18
+            } else {
+                0x10
+            }
+        )
     }
 }
