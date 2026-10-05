@@ -53,7 +53,6 @@ class Rtl2832uUsbControl(
         if (length <= 0) return null
 
         val buffer = ByteArray(length)
-
         val index = (block and 0xFF) shl 8
 
         val result = connection.controlTransfer(
@@ -66,11 +65,7 @@ class Rtl2832uUsbControl(
             CTRL_TIMEOUT
         )
 
-        if (result != length) {
-            return null
-        }
-
-        return buffer
+        return if (result == length) buffer else null
     }
 
     fun writeRegister(
@@ -99,56 +94,42 @@ class Rtl2832uUsbControl(
     fun readRegisterByte(
         block: Int,
         address: Int
-    ): Int? {
-
-        val data = readRegister(
-            block,
-            address,
-            1
-        ) ?: return null
-
-        return data[0].toInt() and 0xFF
-    }
+    ): Int? =
+        readRegister(block, address, 1)
+            ?.get(0)
+            ?.toInt()
+            ?.and(0xFF)
 
     fun writeRegisterByte(
         block: Int,
         address: Int,
         value: Int
-    ): Boolean {
-
-        return writeRegister(
+    ): Boolean =
+        writeRegister(
             block,
             address,
-            byteArrayOf(
-                (value and 0xFF).toByte()
-            )
+            byteArrayOf((value and 0xFF).toByte())
         )
-    }
 
     fun readRegister16(
         block: Int,
         address: Int
     ): Int? {
 
-        val data = readRegister(
-            block,
-            address,
-            2
-        ) ?: return null
+        val data =
+            readRegister(block, address, 2)
+                ?: return null
 
-        return (
-            ((data[1].toInt() and 0xFF) shl 8) or
-                (data[0].toInt() and 0xFF)
-            )
+        return ((data[1].toInt() and 0xFF) shl 8) or
+            (data[0].toInt() and 0xFF)
     }
 
     fun writeRegister16(
         block: Int,
         address: Int,
         value: Int
-    ): Boolean {
-
-        return writeRegister(
+    ): Boolean =
+        writeRegister(
             block,
             address,
             byteArrayOf(
@@ -156,7 +137,6 @@ class Rtl2832uUsbControl(
                 (value and 0xFF).toByte()
             )
         )
-    }
 
     fun readDemodRegister(
         page: Int,
@@ -184,11 +164,7 @@ class Rtl2832uUsbControl(
             CTRL_TIMEOUT
         )
 
-        if (result != length) {
-            return null
-        }
-
-        return buffer
+        return if (result == length) buffer else null
     }
 
     fun writeDemodRegister(
@@ -221,43 +197,29 @@ class Rtl2832uUsbControl(
     fun readDemodRegisterByte(
         page: Int,
         address: Int
-    ): Int? {
-
-        val data = readDemodRegister(
-            page,
-            address,
-            1
-        ) ?: return null
-
-        return data[0].toInt() and 0xFF
-    }
+    ): Int? =
+        readDemodRegister(page, address, 1)
+            ?.get(0)
+            ?.toInt()
+            ?.and(0xFF)
 
     fun writeDemodRegisterByte(
         page: Int,
         address: Int,
         value: Int
-    ): Boolean {
-
-        return writeDemodRegister(
+    ): Boolean =
+        writeDemodRegister(
             page,
             address,
-            byteArrayOf(
-                (value and 0xFF).toByte()
-            )
+            byteArrayOf((value and 0xFF).toByte())
         )
-    }
 
     /*
      * RTL2832U I2C write.
      *
-     * The tuner driver sends:
-     *
-     *   [register][data...]
-     *
-     * to the tuner I2C address.
-     *
-     * This is the same logical operation used by rtl-sdr's
-     * rtlsdr_i2c_write_fn().
+     * Important: for RTL2832U the I2C slave address is
+     * the USB control-transfer wValue. The wIndex contains
+     * only the IIC block plus the write flag (0x10).
      */
     fun i2cWrite(
         address: Int,
@@ -266,32 +228,27 @@ class Rtl2832uUsbControl(
 
         if (data.isEmpty()) return false
 
-        val buffer = data.copyOf()
-
         val index =
-            ((BLOCK_IIC and 0xFF) shl 8) or
-                (address and 0xFF)
+            ((BLOCK_IIC and 0xFF) shl 8) or 0x10
 
         val result = connection.controlTransfer(
             CTRL_OUT,
             0,
-            0,
+            address and 0xFF,
             index,
-            buffer,
-            buffer.size,
+            data,
+            data.size,
             CTRL_TIMEOUT
         )
 
-        return result == buffer.size
+        return result == data.size
     }
 
     /*
      * RTL2832U I2C read.
      *
-     * The tuner protocol first writes the register number,
-     * then performs a read transaction.
-     *
-     * This method performs the read part.
+     * The register number is written first, then the tuner
+     * is read using the same I2C slave address.
      */
     fun i2cRead(
         address: Int,
@@ -304,40 +261,33 @@ class Rtl2832uUsbControl(
         val buffer = ByteArray(length)
 
         val index =
-            ((BLOCK_IIC and 0xFF) shl 8) or
-                (address and 0xFF)
+            (BLOCK_IIC and 0xFF) shl 8
 
         val result = connection.controlTransfer(
             CTRL_IN,
             0,
-            0,
+            address and 0xFF,
             index,
             buffer,
             length,
             CTRL_TIMEOUT
         )
 
-        if (result != length) {
-            return null
-        }
-
-        return buffer
+        return if (result == length) buffer else null
     }
 
     fun i2cWriteRegister(
         address: Int,
         register: Int,
         value: Int
-    ): Boolean {
-
-        return i2cWrite(
+    ): Boolean =
+        i2cWrite(
             address,
             byteArrayOf(
                 (register and 0xFF).toByte(),
                 (value and 0xFF).toByte()
             )
         )
-    }
 
     fun i2cReadRegister(
         address: Int,
@@ -347,35 +297,24 @@ class Rtl2832uUsbControl(
         if (
             !i2cWrite(
                 address,
-                byteArrayOf(
-                    (register and 0xFF).toByte()
-                )
+                byteArrayOf((register and 0xFF).toByte())
             )
         ) {
             return null
         }
 
-        val data =
-            i2cRead(address, 1)
-                ?: return null
-
-        if (data.isEmpty()) return null
-
-        return data[0].toInt() and 0xFF
+        return i2cRead(address, 1)
+            ?.get(0)
+            ?.toInt()
+            ?.and(0xFF)
     }
 
     fun setI2cRepeater(
         enabled: Boolean
-    ): Boolean {
-
-        return writeDemodRegisterByte(
+    ): Boolean =
+        writeDemodRegisterByte(
             1,
             0x01,
-            if (enabled) {
-                0x18
-            } else {
-                0x10
-            }
+            if (enabled) 0x18 else 0x10
         )
-    }
 }
