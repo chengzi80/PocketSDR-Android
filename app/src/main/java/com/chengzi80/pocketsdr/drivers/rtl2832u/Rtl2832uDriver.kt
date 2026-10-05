@@ -13,10 +13,21 @@ class Rtl2832uDriver(
     private var usbDevice:
             Rtl2832uUsbDevice? = null
 
+    private var control:
+            Rtl2832uUsbControl? = null
+
+    private var demodulator:
+            Rtl2832uDemodulator? = null
+
     val isOpen: Boolean
         get() = connection != null
 
-    val deviceInfo: Rtl2832uUsbDevice?
+    val isInitialized: Boolean
+        get() =
+            demodulator?.isInitialized == true
+
+    val deviceInfo:
+            Rtl2832uUsbDevice?
         get() = usbDevice
 
     fun open(
@@ -29,7 +40,7 @@ class Rtl2832uDriver(
             usbManager.openDevice(
                 device.device
             )
-            ?: return false
+                ?: return false
 
         if (
             !conn.claimInterface(
@@ -44,12 +55,57 @@ class Rtl2832uDriver(
         }
 
         connection = conn
+
         usbDevice = device
+
+        control =
+            Rtl2832uUsbControl(
+                conn
+            )
+
+        demodulator =
+            Rtl2832uDemodulator(
+                control!!
+            )
 
         return true
     }
 
+    fun initialize(): Boolean {
+
+        val demod =
+            demodulator
+                ?: return false
+
+        return demod.initialize()
+    }
+
+    fun getControl():
+            Rtl2832uUsbControl? {
+
+        return control
+    }
+
+    fun getConnection():
+            UsbDeviceConnection? {
+
+        return connection
+    }
+
+    fun resetDemodulator(): Boolean {
+
+        return demodulator?.reset()
+            ?: false
+    }
+
     fun close() {
+
+        try {
+
+            demodulator?.reset()
+
+        } catch (_: Exception) {
+        }
 
         try {
 
@@ -80,37 +136,11 @@ class Rtl2832uDriver(
         }
 
         connection = null
+
         usbDevice = null
-    }
 
-    fun getConnection():
-            UsbDeviceConnection? {
+        control = null
 
-        return connection
-    }
-
-    fun controlTransfer(
-        requestType: Int,
-        request: Int,
-        value: Int,
-        index: Int,
-        buffer: ByteArray?,
-        length: Int,
-        timeout: Int
-    ): Int {
-
-        val conn =
-            connection
-            ?: return -1
-
-        return conn.controlTransfer(
-            requestType,
-            request,
-            value,
-            index,
-            buffer,
-            length,
-            timeout
-        )
+        demodulator = null
     }
 }
