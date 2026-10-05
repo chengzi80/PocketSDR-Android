@@ -9,43 +9,23 @@ class R82xxTuner(
         /*
          * R820T / R820T2 I2C address
          */
-        private const val R820T_I2C_ADDR =
-            0x34
+        private const val R820T_I2C_ADDR = 0x34
 
         /*
          * R828D I2C address
          */
-        private const val R828D_I2C_ADDR =
-            0x74
+        private const val R828D_I2C_ADDR = 0x74
 
         /*
-         * R820T register range
+         * R82xx register start address
          */
-        private const val REG_START =
-            0x05
-
-        private const val REG_END =
-            0x1F
-
-        /*
-         * R820T chip ID register.
-         *
-         * We first read a small register block
-         * and use the returned values to determine
-         * whether an R82xx tuner is responding.
-         */
-        private const val REG_CHIP_ID =
-            0x00
+        private const val REG_START = 0x05
     }
 
     enum class TunerType {
-
         UNKNOWN,
-
         R820T,
-
         R820T2,
-
         R828D
     }
 
@@ -67,56 +47,49 @@ class R82xxTuner(
     fun detect(): DetectionResult? {
 
         /*
-         * The RTL2832U I2C repeater must be enabled
-         * before communicating with the tuner.
+         * Enable RTL2832U I2C repeater.
          */
-
         if (
-            !control.setI2cRepeater(
-                true
-            )
+            !control.setI2cRepeater(true)
         ) {
             return null
         }
 
         /*
-         * R820T/R820T2 normally use 0x34.
+         * Try R820T / R820T2.
          */
-
         val r820Registers =
             readRegisters(
-                R820T_I2C_ADDR,
-                REG_START,
-                5
+                address = R820T_I2C_ADDR,
+                startRegister = REG_START,
+                length = 5
             )
 
         if (
             r820Registers != null &&
-            r820Registers.size >= 5
+            r820Registers.size == 5
         ) {
 
-            val result =
+            val tunerType =
                 detectR82xxType(
                     r820Registers
                 )
 
             if (
-                result !=
+                tunerType !=
                 TunerType.UNKNOWN
             ) {
 
                 detectedType =
-                    result
+                    tunerType
 
                 detectedAddress =
                     R820T_I2C_ADDR
 
                 return DetectionResult(
-                    type = result,
-                    i2cAddress =
-                        R820T_I2C_ADDR,
-                    registers =
-                        r820Registers
+                    type = tunerType,
+                    i2cAddress = R820T_I2C_ADDR,
+                    registers = r820Registers
                 )
             }
         }
@@ -124,17 +97,16 @@ class R82xxTuner(
         /*
          * Try R828D.
          */
-
         val r828dRegisters =
             readRegisters(
-                R828D_I2C_ADDR,
-                REG_START,
-                5
+                address = R828D_I2C_ADDR,
+                startRegister = REG_START,
+                length = 5
             )
 
         if (
             r828dRegisters != null &&
-            r828dRegisters.size >= 5
+            r828dRegisters.size == 5
         ) {
 
             detectedType =
@@ -145,10 +117,8 @@ class R82xxTuner(
 
             return DetectionResult(
                 type = TunerType.R828D,
-                i2cAddress =
-                    R828D_I2C_ADDR,
-                registers =
-                    r828dRegisters
+                i2cAddress = R828D_I2C_ADDR,
+                registers = r828dRegisters
             )
         }
 
@@ -166,16 +136,15 @@ class R82xxTuner(
     ): TunerType {
 
         /*
-         * At this stage we deliberately do not
-         * hard-code a single byte as "R820T2".
+         * R820T and R820T2 use the same r82xx
+         * driver family in rtl-sdr.
          *
-         * R820T and R820T2 share the r82xx driver
-         * in rtl-sdr.
+         * At this stage we only verify that the
+         * tuner returns meaningful register data.
          *
-         * We first establish that the tuner responds
-         * correctly. Detailed chip revision detection
-         * will be added when the full initialization
-         * sequence is implemented.
+         * Exact revision detection will be added
+         * together with the complete tuner
+         * initialization sequence.
          */
 
         var nonZeroCount =
@@ -183,17 +152,15 @@ class R82xxTuner(
 
         for (value in registers) {
 
-            if (
-                (value.toInt() and 0xFF) != 0x00
-            ) {
+            val unsignedValue =
+                value.toInt() and 0xFF
+
+            if (unsignedValue != 0) {
                 nonZeroCount++
             }
         }
 
-        if (
-            nonZeroCount >= 2
-        ) {
-
+        if (nonZeroCount >= 2) {
             return TunerType.R820T2
         }
 
@@ -207,17 +174,15 @@ class R82xxTuner(
     ): ByteArray? {
 
         /*
-         * First write the tuner register address.
+         * Write the register address first.
          */
-
         val writeResult =
             control.i2cWrite(
                 address,
                 byteArrayOf(
-                    (
-                        startRegister and
-                                0xFF
-                        ).toByte()
+                    startRegister
+                        .and(0xFF)
+                        .toByte()
                 )
             )
 
@@ -226,9 +191,8 @@ class R82xxTuner(
         }
 
         /*
-         * Then read the tuner registers.
+         * Read tuner registers.
          */
-
         val data =
             control.i2cRead(
                 address,
@@ -236,24 +200,17 @@ class R82xxTuner(
             )
                 ?: return null
 
-        if (
-            data.size != length
-        ) {
+        if (data.size != length) {
             return null
         }
 
         /*
-         * R82xx I2C data is bit-reversed.
+         * Reverse the bits of every byte.
          */
-
         val result =
-            ByteArray(
-                data.size
-            )
+            ByteArray(data.size)
 
-        for (
-            i in data.indices
-        ) {
+        for (i in data.indices) {
 
             result[i] =
                 bitReverse(
@@ -274,19 +231,14 @@ class R82xxTuner(
         var result =
             0
 
-        for (
-            i in 0 until 8
-        ) {
+        for (i in 0 until 8) {
+
+            val bit =
+                (input shr i) and 0x01
 
             result =
                 result or
-                        (
-                            (
-                                input shr i
-                            ) and 0x01
-                            shl (7 - i)
-                        )
-            )
+                        (bit shl (7 - i))
         }
 
         return result
@@ -312,12 +264,14 @@ class R82xxTuner(
 
     fun markInitialized() {
 
-        initialized = true
+        initialized =
+            true
     }
 
     fun reset() {
 
-        initialized = false
+        initialized =
+            false
 
         detectedType =
             TunerType.UNKNOWN
