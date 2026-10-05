@@ -567,20 +567,13 @@ class Rtl2832uDemodulator(
     fun resetBuffer(): Boolean {
 
         /*
-         * Stop endpoint.
-         */
-        if (
-            !control.writeRegisterByte(
-                USB_BLOCK,
-                REG_USB_EPA_CFG,
-                0x00
-            )
-        ) {
-            return false
-        }
-
-        /*
-         * Re-enable endpoint.
+         * RTL-SDR reference sequence:
+         *
+         *   USB_EPA_CTL = 0x1002
+         *   USB_EPA_CTL = 0x0000
+         *
+         * This resets the RTL2832U USB endpoint/FIFO
+         * before bulk IQ acquisition.
          */
         if (
             !control.writeRegister16(
@@ -592,14 +585,11 @@ class Rtl2832uDemodulator(
             return false
         }
 
-        /*
-         * Clear FIFO configuration.
-         */
         if (
-            !control.writeRegisterByte(
+            !control.writeRegister16(
                 USB_BLOCK,
-                REG_USB_EPA_FIFO_CFG,
-                0x00
+                REG_USB_EPA_CTL,
+                0x0000
             )
         ) {
             return false
