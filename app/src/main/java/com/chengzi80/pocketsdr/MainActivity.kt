@@ -1,5 +1,6 @@
 package com.chengzi80.pocketsdr
 
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.LinearLayout
@@ -7,6 +8,9 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.chengzi80.pocketsdr.core.SdrDevice
 import com.chengzi80.pocketsdr.core.SdrDeviceManager
+import com.chengzi80.pocketsdr.drivers.rtl2832u.Rtl2832uDriver
+import com.chengzi80.pocketsdr.drivers.rtl2832u.Rtl2832uUsbDevice
+import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
@@ -15,6 +19,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var deviceText: TextView
     private lateinit var detailText: TextView
+
+    private var rtlDriver: Rtl2832uDriver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +35,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         deviceManager.onDeviceDetached = {
+            closeRtlDriver()
             runOnUiThread {
                 statusText.text = "SDR 设备已断开"
                 deviceText.text = "设备：未检测到"
@@ -47,12 +54,25 @@ class MainActivity : AppCompatActivity() {
         deviceManager.onDeviceConnected = { device ->
             runOnUiThread {
                 updateDevice(device)
-                statusText.text = "SDR 设备已连接"
-                detailText.text = "USB SDR 设备已准备就绪"
+                statusText.text = "USB 已连接，正在初始化 SDR..."
+                detailText.text = "正在测试 RTL2832U USB 控制、Demodulator 和 R82xx Tuner"
+            }
+
+            if (
+                device.vendorId == 0x0BDA &&
+                device.productId == 0x2838
+            ) {
+                initializeRtl2832u(device)
+            } else {
+                runOnUiThread {
+                    statusText.text = "SDR 设备已连接"
+                    detailText.text = "USB SDR 设备已准备就绪"
+                }
             }
         }
 
         deviceManager.onDeviceDisconnected = {
+            closeRtlDriver()
             runOnUiThread {
                 statusText.text = "SDR 设备已断开"
                 deviceText.text = "设备：未检测到"
@@ -68,6 +88,114 @@ class MainActivity : AppCompatActivity() {
         }
 
         deviceManager.start()
+    }
+
+    private fun initializeRtl2832u(device: SdrDevice) {
+        thread(name = "rtl2832u-init") {
+            try {
+                val usbDevice =
+                    Rtl2832uUsbDevice.find(device.usbDevice)
+
+                if (usbDevice == null) {
+                    runOnUiThread {
+                        statusText.text = "RTL2832U USB接口检测失败"
+                        detailText.text = "没有找到可用的 Bulk IN USB 接口"
+                    }
+                    return@thread
+                }
+
+                val usbManager =
+                    getSystemService(USB_SERVICE) as UsbManager
+
+                val driver =
+                    Rtl2832uDriver(usbManager)
+
+                rtlDriver = driver
+
+                if (!driver.open(usbDevice)) {
+                    val error =
+                        driver.getLastError()
+                            ?: "未知 USB 打开错误"
+
+                    runOnUiThread {
+                        statusText.text = "RTL2832U 打开失败"
+                        detailText.text = error
+                    }
+                    return@thread
+                }
+
+                runOnUiThread {
+                    statusText.text = "RTL2832U USB 控制正常，正在初始化..."
+                }
+
+                if (!driver.initialize()) {
+                    val error =
+                        driver.getLastError()
+                            ?: "RTL2832U 初始化失败"
+
+                    runOnUiThread {
+                        statusText.text = "RTL2832U 初始化失败"
+                        detailText.text = error
+                    }
+
+                    driver.close()
+                    rtlDriver = null
+                    return@thread
+                }
+
+                val tunerType =
+                    driver.getTunerType().name
+
+                val tunerAddress =
+                    "0x" +
+                        driver.getTunerI2cAddress()
+                            .toString(16)
+                            .uppercase()
+
+                val pllLock =
+                    if (driver.getTunerPllLock()) {
+                        "已锁定"
+                    } else {
+                        "未锁定"
+                    }
+
+                runOnUiThread {
+                    statusText.text = "RTL2832U + R82xx 初始化成功"
+                    detailText.text =
+                        "USB 控制传输：正常\n" +
+                        "Demodulator：正常\n" +
+                        "Tuner：$tunerType\n" +
+                        "I²C 地址：$tunerAddress\n" +
+                        "PLL：$pllLock\n" +
+                        "采样率：${driver.getSampleRateHz()} Hz\n" +
+                        "中心频率：${driver.getFrequencyHz()} Hz"
+                }
+
+            } catch (e: Exception) {
+                closeRtlDriver()
+
+                runOnUiThread {
+                    statusText.text = "RTL2832U 硬件测试异常"
+                    detailText.text =
+                        e.message
+                            ?: e.javaClass.simpleName
+                }
+            }
+        }
+    }
+
+    private fun closeRtlDriver() {
+        val driver = rtlDriver
+        rtlDriver = null
+
+        if (driver != null) {
+            thread(name = "rtl2832u-close") {
+                try {
+                    driver.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     private fun createUi() {
@@ -131,6 +259,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        closeRtlDriver()
         deviceManager.stop()
         super.onDestroy()
     }
