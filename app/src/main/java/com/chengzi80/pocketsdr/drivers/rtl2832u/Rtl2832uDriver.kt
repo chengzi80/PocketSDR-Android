@@ -406,22 +406,6 @@ class Rtl2832uDriver(
             }
 
         /*
-         * Re-apply sample rate.
-         */
-        if (
-            !demod.setSampleRate(
-                sampleConfig.sampleRateHz
-            )
-        ) {
-
-            onError(
-                "RTL2832U采样率设置失败"
-            )
-
-            return false
-        }
-
-        /*
          * Tune tuner.
          */
         if (
