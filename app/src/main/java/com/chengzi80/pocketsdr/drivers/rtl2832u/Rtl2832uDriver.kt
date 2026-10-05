@@ -406,20 +406,27 @@ class Rtl2832uDriver(
             }
 
         /*
-         * Tune tuner.
+         * The tuner was already tuned during initialization.
+         * Do not retune the same frequency immediately before
+         * starting IQ streaming; some R820T2 devices can lose
+         * PLL lock when the identical tuning sequence is repeated.
          */
         if (
-            !setFrequency(
-                sampleConfig.frequencyHz
-            )
+            getFrequencyHz() != sampleConfig.frequencyHz
         ) {
+            if (
+                !setFrequency(
+                    sampleConfig.frequencyHz
+                )
+            ) {
 
-            onError(
-                lastError
-                    ?: "SDR中心频率设置失败"
-            )
+                onError(
+                    lastError
+                        ?: "SDR中心频率设置失败"
+                )
 
-            return false
+                return false
+            }
         }
 
         /*
